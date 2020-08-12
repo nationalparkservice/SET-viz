@@ -11,6 +11,9 @@ runtime: shiny
 # saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
 # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
+### NOTES
+# Converted all tibbles to data frames to get rid of phantom column name errors
+
 ### QUESTIONS
 # Removing records with NA in any of these columns (StationName, EventDate, PipeDirection, PinPosition, PinHeightMm1)--any reason to keep those in? Can provide an output of which records were excluded, or just a summary of counts
 # When calculating diff, only use 'Standard observation'?
@@ -102,14 +105,6 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 
 ```{r startup}
 rv <- reactiveValues(DataSET = NULL, DataMarker = NULL, DataStation = NULL, SubDataSET = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshHeatMaps = NULL)
-
-# >>>>>>>>>>>>>>>>>>> TESTING ONLY
-TEST_rv <- readRDS("~/NPS PROJECTS_CURRENT/Dash_SETviz/TEST_rv.RDS")
-for(i in names(TEST_rv)) {
-    rv[[i]] <- TEST_rv[[i]] # load the data in the dashboard
-  }
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
 
 cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "chartreuse", "lightpink", "honeydew2") # Colorblind-friendly palette that will be used throughout
 ```
@@ -434,9 +429,6 @@ FuncOrderCheck <- function(import = TRUE, examine = TRUE, plot = TRUE) {
       need(!is.null(rv$ThreshHeatMaps), message = "Please first enter thresholds criteria for the heat maps, then click the green 'Recalculate Heat Maps' button"))
   }
 }
-
-
-
 ```
 
 ```{r action_buttons}
@@ -473,11 +465,11 @@ observeEvent(eventExpr = input$button_Import, {
   shiny::req(length(station_files_vec) > 0)
   
   withProgress(message = "Importing and formatting data...", value = 0, {
-    cat("line489")
+    
     # Combine SET data in a single file
   unlink(list.files(path = here::here(), pattern = "^dataMaid"))
   temp_SET <- FuncImportList(filepaths_vec = SET_files_vec) %>% dplyr::filter(!is.na(StationName) & !is.na(EventDate) & !is.na(PipeDirection) & !is.na(PinPosition)  & !is.na(PinHeightMm1)) # remove records without result recorded in these important columns >>>>>>>>>>>>>>>>>>> REDO WITH complete.cases
-  cat("line493")
+  
   factor_cols <- c("Park", "ParkCode", "SiteName", "StationName", "PipeDirection", "PinPosition", "DataProcessingLevel", "ObservationType1", "PinFlag")
   temp_SET[factor_cols] <- lapply(temp_SET[factor_cols], factor) # convert to factors so can use drop-down lists in data tables
   temp_SET2 <- FuncBreakDates(dat = temp_SET)
@@ -492,6 +484,78 @@ observeEvent(eventExpr = input$button_Import, {
   ))
   }
 )
+
+# (Examine) Run data check (dataMaid report) ----
+observeEvent(eventExpr = input$button_RunDataCheck, {
+ 
+  unlink(list.files(path = here::here(), pattern = "^dataMaid")) 
+  rv$ShowDM <- FALSE
+  
+  if(is.null(input$table_summary_rows_selected)) {
+    showModal(modalDialog(
+      title = "No record selected",
+      "From the table, select the record for which you would like to generate a data check report"
+    )
+    )
+  }
+  shiny::req(!is.null(input$table_summary_rows_selected))
+  
+  shiny::req(!is.null(rv$SubDataSET), !is.null(input$table_summary_rows_selected)) 
+
+withProgress(message = "Generating data check report...", value = 0, { # show progress bar
+    
+    check_sub <- rv$SubDataSET %>%
+      dplyr::select(-SetDirectionNotes, -MnthDate, -WkDate) %>%
+      dplyr::mutate(StationName = as.character(StationName)) %>%
+      dplyr::filter(StationName == rv$SubDataSummary[input$table_summary_rows_selected, "StationName"])
+
+    shiny::req(!is.null(check_sub))
+    if(nrow(check_sub) > 0) {
+
+dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
+  character = "vertLabStandardVisual",
+  factor = "vertLabStandardVisual",
+  labelled = "vertLabStandardVisual",
+  haven_labelled = "vertLabStandardVisual",
+  numeric = "standardVisual",
+  integer = "standardVisual",
+  logical = "vertLabStandardVisual",
+  Date = "standardVisual"), listChecks = FALSE, smartNum = FALSE, reportTitle = paste0("Station ", toupper(as.character(rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]))), render = TRUE, output = "html", openResult = FALSE, replace = TRUE, useVar = names(check_sub), file = "dataMaid.Rmd")
+      rv$ShowDM <- file.exists(here::here("dataMaid.html"))
+
+    }
+  })
+
+showModal(modalDialog(
+  title = "Done",
+  "The report can be viewed in the 'Data Check Report' tab."
+  ))
+})
+
+# (Heat maps) # Recalculate heat maps ----
+observeEvent(eventExpr = input$button_recalcHeatMaps, { 
+
+  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
+  
+  withProgress(message = "Calculating heat maps...", value = 0, {
+    
+    # Calculate threshold levels
+    if(input$sel_ThresholdType == "quant") {
+    shiny::req(!is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
+    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
+    }
+    
+    if(input$sel_ThresholdType == "numb") {
+      shiny::req(!is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
+      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
+    }
+    
+    # Create heatmaps
+    shiny::req(!is.null(rv$ThreshDataSET))
+    rv$ThreshHeatMaps <- FuncPlotlyHeatMap(dat = rv$ThreshDataSET)
+   
+    })
+})
 ```
 
 ```{r page_examine}
@@ -514,12 +578,13 @@ renderUI({
 # Filter and summarize data ----
 renderUI({
   shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park), !is.null(input$sel_YrRange), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
-  cat("line530")
+  
   temp_subdata <- rv$DataSET %>%
     dplyr::filter(Park == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType)
-  cat("line533")
+
+  shiny::req(!is.null(temp_subdata))
   shiny::req(nrow(temp_subdata) > 0)
-  
+ 
   temp_summary <- temp_subdata %>%
     dplyr::group_by(Park, SiteName, StationName) %>%
     dplyr::summarize(
@@ -529,73 +594,13 @@ renderUI({
       NumRecords = n()
       ) %>%
     ungroup()
+  shiny::req(!is.null(temp_summary))
   temp_summary <- droplevels(temp_summary)
-  
-  rv$SubDataSET <- temp_subdata
+
+  rv$SubDataSET <- as.data.frame(temp_subdata)
   rv$SubDataSummary <- as.data.frame(temp_summary)
-  })
-
-# Action to run data check ----
-observeEvent(eventExpr = input$button_RunDataCheck, {
  
-  unlink(list.files(path = here::here(), pattern = "^dataMaid")) 
-  rv$ShowDM <- FALSE
-  
-  shiny::req(!is.null(rv$SubDataSET), !is.null(input$table_summary_rows_selected)) 
-
-withProgress(message = "Generating data check report...", value = 0, { # show progress bar
-    cat("line560")
-    check_sub <- rv$SubDataSET %>%
-      dplyr::select(-SetDirectionNotes, -MnthDate, -WkDate) %>%
-      dplyr::filter(as.character(StationName) ==  as.character(rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]$StationName))
- cat("line564")
-    shiny::req(!is.null(check_sub))
-    if(nrow(check_sub) > 0) {
-
-dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
-  character = "vertLabStandardVisual",
-  factor = "vertLabStandardVisual",
-  labelled = "vertLabStandardVisual",
-  haven_labelled = "vertLabStandardVisual",
-  numeric = "standardVisual",
-  integer = "standardVisual",
-  logical = "vertLabStandardVisual",
-  Date = "standardVisual"), listChecks = FALSE, smartNum = FALSE, reportTitle = paste0("Station ", toupper(as.character(rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]$StationName))), render = TRUE, output = "html", openResult = FALSE, replace = TRUE, useVar = names(check_sub), file = "dataMaid.Rmd")
-      rv$ShowDM <- file.exists(here::here("dataMaid.html"))
-
-    }
   })
-})
-```
-
-```{r page_heat}
-# Action to update data summaries with current user inputs----
-observeEvent(eventExpr = input$button_recalcHeatMaps, { 
-
-  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
-  cat("line514")
-  withProgress(message = "Calculating heat maps...", value = 0, {
-    
-    # Calculate threshold levels
-    if(input$sel_ThresholdType == "quant") {
-    shiny::req(!is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
-    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
-    }
-    
-    if(input$sel_ThresholdType == "numb") {
-      shiny::req(!is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
-      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
-    }
-    
-    # Create heatmaps
-    cat("line535")
-    shiny::req(!is.null(rv$ThreshDataSET))
-    saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
-    rv$ThreshHeatMaps <- FuncPlotlyHeatMap(dat = rv$ThreshDataSET)
-    cat("line538")
-    })
-})
 ```
   
 HOME
@@ -716,7 +721,7 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
 
 Data Check {.tabset .tabset-fade}
 -------------------------------------
-
+  
 ### Year Range and Total Years of Data
 
 ```{r examine_summary}
@@ -730,7 +735,7 @@ output$table_summary <- DT::renderDT({
     selection = list(mode = "single", target = "row"), # extract information on user-selected rows
     options = list(
       columnDefs = list(list(className = "dt-center", targets = "_all"))))
-  })
+})
 
 DTOutput("table_summary")
 tags$style("#table_summary{height:100vh;overflow-x:scroll;overflow-y:scroll}")
@@ -745,24 +750,25 @@ renderUI({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
   shiny::req(rv$ShowDM == TRUE)
   tags$iframe(src="working_dir/dataMaid.html", width = "100%", height = "100%", overflow = "scroll") # don't use 100% for height because it won't show the whole thing
-  })
+})
 ```
 
 ### Selected Raw Data
 ```{r data_types_records}
 output$table_raw <- DT::renderDT({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
-cat("line767")
+ 
+  shiny::req(!is.null(input$table_summary_rows_selected))
   DT::datatable(
     rv$SubDataSET %>%
-      dplyr::filter(as.character(StationName) ==  as.character(rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]$StationName)), # user-selected station
+      dplyr::mutate(StationName = as.character(StationName)) %>%
+      dplyr::filter(StationName ==  rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]), # user-selected station
     filter = "top",
     rownames = FALSE,
     selection = "none",
     options = list(
       columnDefs = list(list(className = "dt-center", targets = "_all"))))
 })
-cat("line778")
 DTOutput("table_raw")
 tags$style("#table_raw{height:100vh;overflow-x:scroll;overflow-y:scroll}")
 ```
@@ -866,7 +872,6 @@ renderPlot({
 
 renderPlotly({ # separate validation statements so they are checked in sequence
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = TRUE)
-  cat("line803")
 
   rv$ThreshHeatMaps
 })
