@@ -5,6 +5,12 @@
 # Session Data files
 .RData
 
+# DataMaid files
+*DataMaid*
+
+# Data_in folder
+/Data_in/
+
 # User-specific files
 .Ruserdata
 
