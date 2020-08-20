@@ -438,7 +438,19 @@ observeEvent(eventExpr = input$button_CancelModal, {
   removeModal()
   })
 
-# (Home) Import and format data ----
+# (Home) Import and format data via SQL database download ----
+observeEvent(eventExpr = input$button_Import_SQL, {
+  # Still need to work through the logistics of wiring this up. Based on what I know so far this requires the user to
+  # have database permissions, the computer where the script is running to have a named ODBC connection, and some sort of
+  # selection of at least network (or you'd get data for all 5 networks).
+    { showModal(modalDialog(
+      title = "Future Feature!",
+      "Direct import of the data from the SQL database is a new feature that is under development!"))
+    }
+  }
+)
+
+# (Home) Import and format data via CSV files ----
 observeEvent(eventExpr = input$button_Import, {
   # Look for files of SET data
   SET_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*SET Data*")) 
@@ -641,7 +653,12 @@ This dashboard is a resource for lorem ipsum dolor sit amet, consectetur adipisc
 <br>
 
 ```{r}
-actionButton("button_Import", "Import and Format Data", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+actionButton("button_Import", "Import and Format Data from CSV Files", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+```
+
+
+```{r}
+actionButton("button_Import_SQL", "Import and Format Data from the SQL Database", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
 ```
 
 Column {data-width=10}
