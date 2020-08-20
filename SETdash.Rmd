@@ -11,6 +11,16 @@ runtime: shiny
 # saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
 # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
+### PICK UP FROM HERE
+# User can edit the CheckFlag and CheckNote columns in Raw Data File--I'm having trouble accessing the RecordID to make that change
+# Records Export Page 
+# >> side panel allows user to choose which columns to view (and export). 
+# >> User can edit CheckFlag and CHeckNote columns here. (User can use filter columns to show only flagged records or only above/below threshold records...)--this is where the Save-as-csv option should be, not at the data import stage.
+# >> Button to export records in NERRS format
+# User can click a cell on the heatmaps page to flag a record and add a CheckNote--click again to unflag. Cell text should be bold and larger when flagged.
+# I think I should allow user to save the CheckNotes and CheckFlag data in .RDS for later processing.
+
+
 ### NOTES
 # Converted all tibbles to data frames to get rid of phantom column name errors
 
@@ -104,7 +114,7 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 ```
 
 ```{r startup}
-rv <- reactiveValues(DataSET = NULL, DataMarker = NULL, DataStation = NULL, SubDataSET = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshHeatMaps = NULL)
+rv <- reactiveValues(DataSET = NULL, DataMarker = NULL, DataStation = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, PickList = NULL, ThreshHeatMaps = NULL)
 
 cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "chartreuse", "lightpink", "honeydew2") # Colorblind-friendly palette that will be used throughout
 ```
@@ -158,7 +168,10 @@ FuncImportList <- function(filepaths_vec, colnames_start = "Park,Park_Code,Site_
   }
   combined_file <- plyr::rbind.fill(import_list) %>% # combine the data frames
     dplyr::distinct(.keep_all = TRUE) %>% # if there are any exactly duplicated records, only keep one
-    janitor::clean_names(case = "upper_camel") # convert all column names to upper camel style
+    janitor::clean_names(case = "upper_camel") %>% # convert all column names to upper camel style
+    dplyr::arrange(Park, SiteName, StationName, PipeDirection, PinPosition, EventDate) %>%
+    dplyr::mutate(RecordID = row_number()) %>% # add a unique ID to each record
+    dplyr::select(RecordID, everything()) # put the 'RecordID' column first
   return(combined_file)
 }
 
@@ -174,11 +187,8 @@ FuncBreakDates <- function(dat) {
   dat %<>% 
     dplyr::mutate(
       EventDate = lubridate::as_date(EventDate, format = "%m/%d/%Y"),
-      MnthDate = base::as.Date(cut(EventDate, breaks = "month")),
-      WkDate = base::as.Date(cut(EventDate, breaks = "week", start.on.monday = FALSE)), # Sunday start of week
       Yr = lubridate::year(EventDate), # for annual summaries
-      Mnth = factor(lubridate::month(EventDate), levels = 1:12),
-      Wk = factor(lubridate::week(EventDate), levels = 1:52)
+      Mnth = factor(lubridate::month(EventDate), levels = 1:12)
     )
   # dat$Yr <- factor(dat$Yr, levels = min(dat$Yr, na.rm = TRUE):max(dat$Yr, na.rm = TRUE)) # make sure any missing years are still shown in plots
   return(dat)
@@ -199,10 +209,40 @@ FuncCalcChange <- function(dat) {
       DiffMMHeight = PinHeightMm1 - dplyr::lag(PinHeightMm1, order_by = EventDate),
       DiffDays = EventDate - dplyr::lag(EventDate, order_by = EventDate),
       ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 2)
-    )
+    ) %>%
+    dplyr::ungroup()
+  temp_dat$CheckFlag = FALSE # so user can flag the record for export
+  temp_dat$CheckNote = NA # so user can add notes for export
+  
   return(temp_dat)
 }
   
+# FuncUpdateCheckCols = function(input_edit, output_edit, proxyDT) {
+#   # Function to update the CheckFlag or CheckNote columns of rv$DataSET
+#   #
+#   # Args:
+#   #   input_edit: The reactive input for edited DT cell, e.g., input$raw_table_cell_edit. Must begin with 'input$' and end with '_cell_edit'
+#   #   output_edit: The data frame to be updated, e.g., rv$SubDataSETRaw
+#   #   proxyDT:  The name of the proxy data table, e.g., raw_proxyDT
+#   #
+#   # Returns:
+#   #   Updates the output data frame and also rv$DataSET
+#   #
+#   info = input_edit
+#   i = info$row
+#   j = info$col
+#   v = info$value
+#   
+#   output_edit[i, j] <<- DT::coerceValue(v, isolate(output_edit[i, j]))
+#   replaceData(proxyDT, output_edit, resetPaging = FALSE)
+#   ID_change <- output_edit$RecordID[i]
+#   col_change <- names(output_edit)[j]
+#   rv$DataSET[rv$DataSET$RecordID==ID_change, col_change] <- v
+#   
+#   saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+# saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+# }
+
 FuncCalcQuant <- function(dat) {
   # Function to classify ChangeMMPerYear by user-specified groups and quantiles
   #
@@ -269,8 +309,8 @@ FuncPlotlyHeatMap <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ffa
   #
   dat2 <- dat %>%
     ungroup() %>%
-    dplyr::select(SiteName, StationName, PipeDirection, PinPosition, EventDate, PinHeightMm1, SetDirectionNotes, PinFlag, DiffMMHeight, DiffDays, ChangeMMPerYear, LowerCutoff, UpperCutoff, Level) %>%
-    dplyr::arrange(StationName, PipeDirection, PinPosition, EventDate) %>%
+    dplyr::select(RecordID, SiteName, StationName, PipeDirection, PinPosition, EventDate, PinHeightMm1, SetDirectionNotes, PinFlag, DiffMMHeight, DiffDays, ChangeMMPerYear, LowerCutoff, UpperCutoff, Level) %>%
+    dplyr::arrange(RecordID) %>%
     dplyr::mutate(hover_label = paste0("<br>Date: ", EventDate, "<br>Pin Flag: ", PinFlag, "<br>Set Direction Notes: ", SetDirectionNotes, "<br>Pin Position: ", PinPosition, "<br>Pin Height (mm): ", PinHeightMm1, "<br>Height Diff (mm): ", DiffMMHeight, "<br>Days Diff: ", DiffDays, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>CHANGE PER YR (mm): ", ChangeMMPerYear, "<br>LEVEL: ", Level)) %>%
     droplevels()
   
@@ -306,12 +346,13 @@ FuncPlotlyHeatMap <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ffa
       dplyr::select(PinPosition, EventDate) %>%
       expand(PinPosition, EventDate) %>%
       left_join(subdat_pipe[c("PinPosition", "EventDate", "ChangeMMPerYear")], by = c("PinPosition", "EventDate")) %>%
-      arrange(EventDate, PinPosition)
+      dplyr::arrange(EventDate, PinPosition)
     txt <- matrix(template$ChangeMMPerYear, nrow=length(unique(template$PinPosition)))
     txt[is.na(txt)] <- " " # convert NA to blank, otherwise it sill show as "new text"
 
     plot_ly(
       data = subdat_pipe, 
+      source = "heat_plot",
       text = text,
       width = 52*length(unique(subdat_pipe$EventDate)), 
       height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
@@ -409,19 +450,21 @@ FuncPlotlyHeatMap <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ffa
 
 FuncOrderCheck <- function(import = TRUE, examine = TRUE, plot = TRUE) {
   # Function to check if data have been imported, filtered, and plot data summarized
-  #
-  if(import) {
+
+  if(import == TRUE) {
     shiny::validate(
       need(!is.null(rv$DataSET), message = "No data available. Please first import SET data."))
-    }
-  if(examine) {
+  }
+  
+  if(examine == TRUE) {
     shiny::req(!is.null(rv$DataSET))
     shiny::validate(
       need(!is.null(rv$SubDataSET), message = "Please first use the 'Examine Data' tab to choose a subset of data to examine."))
     shiny::validate(
-      need(nrow(rv$SubDataSummary) > 0, message = "Please first use the 'Examine Data' tab to choose a subset of data to examine."))
-    }
-  if(plot) {
+      need(!is.null(rv$SubDataSummary), message = "Please first use the 'Examine Data' tab to choose a subset of data to examine."))
+  }
+  
+  if(plot == TRUE) {
     shiny::req(!is.null(rv$SubDataSET))
     shiny::validate(
       need(!is.null(rv$ThreshDataSET), message = "Please first enter thresholds criteria for the heat maps, then click the green 'Recalculate Heat Maps' button"))
@@ -439,7 +482,7 @@ observeEvent(eventExpr = input$button_CancelModal, {
   })
 
 # (Home) Import and format data ----
-observeEvent(eventExpr = input$button_Import, {
+observeEvent(eventExpr = input$button_GetData, {
   # Look for files of SET data
   SET_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*SET Data*")) 
   shiny::req(!is.null(SET_files_vec))
@@ -464,26 +507,43 @@ observeEvent(eventExpr = input$button_Import, {
   }
   shiny::req(length(station_files_vec) > 0)
   
-  withProgress(message = "Importing and formatting data...", value = 0, {
+  withProgress(message = "Please wait a bit...", detail = "importing and formatting data", value = 0, {
     
     # Combine SET data in a single file
-  unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-  temp_SET <- FuncImportList(filepaths_vec = SET_files_vec) %>% dplyr::filter(!is.na(StationName) & !is.na(EventDate) & !is.na(PipeDirection) & !is.na(PinPosition)  & !is.na(PinHeightMm1)) # remove records without result recorded in these important columns >>>>>>>>>>>>>>>>>>> REDO WITH complete.cases
+    unlink(list.files(path = here::here(), pattern = "^dataMaid"))
+    temp_SET <- FuncImportList(filepaths_vec = SET_files_vec) %>% dplyr::filter(!is.na(StationName) & !is.na(EventDate) & !is.na(PipeDirection) & !is.na(PinPosition)  & !is.na(PinHeightMm1)) # remove records without result recorded in these important columns >>>>>>>>>>>>>>>>>>> REDO WITH complete.cases
+    
+    factor_cols <- c("Park", "ParkCode", "SiteName", "StationName", "PipeDirection", "PinPosition", "DataProcessingLevel", "ObservationType1", "PinFlag")
+    temp_SET[factor_cols] <- lapply(temp_SET[factor_cols], factor) # convert to factors so can use drop-down lists in data tables
+    temp_SET2 <- FuncBreakDates(dat = temp_SET)
+    rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_SET2))
+    # rv$DataStation <- as.data.frame(FuncImportList(filepaths_vec = station_files_vec))
   
-  factor_cols <- c("Park", "ParkCode", "SiteName", "StationName", "PipeDirection", "PinPosition", "DataProcessingLevel", "ObservationType1", "PinFlag")
-  temp_SET[factor_cols] <- lapply(temp_SET[factor_cols], factor) # convert to factors so can use drop-down lists in data tables
-  temp_SET2 <- FuncBreakDates(dat = temp_SET)
-  rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_SET2))
-  rv$DataStation <- as.data.frame(FuncImportList(filepaths_vec = station_files_vec))
+  # Save formatted files
+  # setProgress(1/2, detail = "saving output files")
+  # showModal( # Pop-up modal asking user to enter prefix to append to saved files
+  #   modalDialog(
+  #     textInput("out_prefix", "Prefix to append to output files: ",
+  #               placeholder = paste0("Sitename_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())))
+  #               ),
+  #     footer = tagList(
+  #       actionButton("button_goSave", "SAVE")
+  #     )
+  #   ))
   })
-  
-  Sys.sleep(0.25)
-  showModal(modalDialog(
-  title = "Done",
-  "Data have been imported. You may now navigate to other pages of this dashboard."
-  ))
-  }
-)
+  })
+
+# (Home) Save formatted files ----
+# observeEvent(input$button_goSave, {
+#     saveRDS(isolate(reactiveValuesToList(rv)), paste0("Data_out/", input$out_prefix, ".RDS"))
+#     write_csv(rv$DataSET, paste0(here::here(), "/Data_out/", input$out_prefix, "_SET_formatted.csv"))
+#     write_csv(rv$DataStation, paste0(here::here(), "/Data_out/", input$out_prefix, "_station_formatted.csv"))
+#   
+#     showModal(modalDialog(
+#       title = "Done",
+#       paste0("The data for dashboard use have been saved as '", input$out_prefix, ".RDS' in the folder 'Data_out' of the current working directory, ", here::here(), ". For your reference, the formatted data have also been saved in .csv format as '", input$out_prefix, "_SET_formatted.csv' and '", input$out_prefix, "_station_formatted.csv' in the same 'Data_out' folder.You may now navigate to the 'Examine Data' tab of this dashboard.") 
+#     ))
+#   })
 
 # (Examine) Run data check (dataMaid report) ----
 observeEvent(eventExpr = input$button_RunDataCheck, {
@@ -500,12 +560,12 @@ observeEvent(eventExpr = input$button_RunDataCheck, {
   }
   shiny::req(!is.null(input$table_summary_rows_selected))
   
-  shiny::req(!is.null(rv$SubDataSET), !is.null(input$table_summary_rows_selected)) 
+  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary), !is.null(input$table_summary_rows_selected)) 
 
 withProgress(message = "Generating data check report...", value = 0, { # show progress bar
     
     check_sub <- rv$SubDataSET %>%
-      dplyr::select(-SetDirectionNotes, -MnthDate, -WkDate) %>%
+      dplyr::select(-SetDirectionNotes) %>%
       dplyr::mutate(StationName = as.character(StationName)) %>%
       dplyr::filter(StationName == rv$SubDataSummary[input$table_summary_rows_selected, "StationName"])
 
@@ -534,9 +594,7 @@ showModal(modalDialog(
 
 # (Heat maps) # Recalculate heat maps ----
 observeEvent(eventExpr = input$button_recalcHeatMaps, { 
-
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
-  
   withProgress(message = "Calculating heat maps...", value = 0, {
     
     # Calculate threshold levels
@@ -552,13 +610,21 @@ observeEvent(eventExpr = input$button_recalcHeatMaps, {
     
     # Create heatmaps
     shiny::req(!is.null(rv$ThreshDataSET))
-    rv$ThreshHeatMaps <- FuncPlotlyHeatMap(dat = rv$ThreshDataSET)
+    
+    pick_list <- rv$ThreshDataSET %>% # pick-list for user clicks on heat map
+      dplyr::select(StationName, PipeDirection) %>%
+      dplyr::arrange(StationName, PipeDirection) %>%
+      distinct()
+    pick_list$curveNumber <- 0:(nrow(pick_list)-1)
+    rv$PickList <- pick_list
    
+    rv$ThreshHeatMaps <- FuncPlotlyHeatMap(dat = rv$ThreshDataSET)
+    
     })
 })
 ```
 
-```{r page_examine}
+```{r page_examine_data}
 
 # Show/hide well panels ----
 renderUI({
@@ -567,7 +633,7 @@ renderUI({
     } else {
       shinyjs::hideElement("wp_ExaminePark")
     }
-  
+
   if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
     shinyjs::showElement("wp_ExamineFilter")
     } else {
@@ -577,14 +643,14 @@ renderUI({
 
 # Filter and summarize data ----
 renderUI({
-  shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park), !is.null(input$sel_YrRange), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
-  
-  temp_subdata <- rv$DataSET %>%
-    dplyr::filter(Park == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType)
+  shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park), !is.null(input$sel_YrRange[1]), !is.null(input$sel_YrRange[2]), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
+
+temp_subdata <- rv$DataSET %>%
+  dplyr::filter(Park == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType)
 
   shiny::req(!is.null(temp_subdata))
   shiny::req(nrow(temp_subdata) > 0)
- 
+
   temp_summary <- temp_subdata %>%
     dplyr::group_by(Park, SiteName, StationName) %>%
     dplyr::summarize(
@@ -594,13 +660,21 @@ renderUI({
       NumRecords = n()
       ) %>%
     ungroup()
-  shiny::req(!is.null(temp_summary))
+
   temp_summary <- droplevels(temp_summary)
+  shiny::req(!is.null(temp_summary))
+  shiny::req(nrow(temp_summary) > 0)
 
   rv$SubDataSET <- as.data.frame(temp_subdata)
   rv$SubDataSummary <- as.data.frame(temp_summary)
- 
+
+  Sys.sleep(0.25) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
   })
+
+# Update CheckFlag and CheckNote columns ----
+# observeEvent(input$table_raw_cell_edit, {
+#   FuncUpdateCheckCols(input_edit = input$table_raw_cell_edit, output_edit = rv$SubDataSETRaw, proxyDT = raw_proxyDT)
+#   })
 ```
   
 HOME
@@ -634,14 +708,14 @@ This dashboard is a resource for lorem ipsum dolor sit amet, consectetur adipisc
 
 <font size="4">1.  Place .csv data files in the 'Data_in' folder. Every data file must have one of these text strings in the file name: 'Marker Data.csv', 'SET Data.csv', or 'Station Data.csv'.</font>
 
-<font size="4">2.  Click the green 'Import and Format Data' button at the bottom of this page.</font>
+<font size="4">2.  Click the green 'Get Data' button at the bottom of this page.</font>
 
 <font size="4">3.  Navigate to the other dashboard pages to view summary tables, graphs, and maps of the data.</font>
 
 <br>
 
 ```{r}
-actionButton("button_Import", "Import and Format Data", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+actionButton("button_GetData", "Get Data", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
 ```
 
 Column {data-width=10}
@@ -663,8 +737,7 @@ shinyjs::hidden( # hide this well panel until !is.null(rv$DataSET)
         "sel_Park",
         label = "Select a Park: ",
         choices = sort(unique(rv$DataSET$Park)),
-        selected = switch(is.null(input$sel_Park)+1, input$sel_Park,
-                          sort(unique(rv$DataSET$Park))[1])
+        selected = switch(is.null(input$sel_Park)+1, input$sel_Park, sort(unique(rv$DataSET$Park))[1])
         )
       }),
     
@@ -719,7 +792,7 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
 )
 ```
 
-Data Check {.tabset .tabset-fade}
+Examine Data - Outputs {.tabset .tabset-fade}
 -------------------------------------
   
 ### Year Range and Total Years of Data
@@ -736,6 +809,7 @@ output$table_summary <- DT::renderDT({
     options = list(
       columnDefs = list(list(className = "dt-center", targets = "_all"))))
 })
+
 
 DTOutput("table_summary")
 tags$style("#table_summary{height:100vh;overflow-x:scroll;overflow-y:scroll}")
@@ -754,21 +828,28 @@ renderUI({
 ```
 
 ### Selected Raw Data
-```{r data_types_records}
+```{r selected_raw_data}
 output$table_raw <- DT::renderDT({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
  
   shiny::req(!is.null(input$table_summary_rows_selected))
-  DT::datatable(
-    rv$SubDataSET %>%
+  rv$SubDataSETRaw <- rv$SubDataSET %>%
       dplyr::mutate(StationName = as.character(StationName)) %>%
-      dplyr::filter(StationName ==  rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]), # user-selected station
+      dplyr::filter(StationName ==  rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]) %>% # user-selected station
+      dplyr::select(-Yr, -Mnth, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
+  
+  temp_raw <- DT::datatable(
+    rv$SubDataSETRaw, # show only the original raw data columns, not newly calculated columns
     filter = "top",
     rownames = FALSE,
     selection = "none",
+    editable = list(target = "cell", disable = list(columns = which(!names(rv$SubDataSETRaw) %in% c("CheckFlag", "CheckNote"))-1)), # column count starts at zero
     options = list(
       columnDefs = list(list(className = "dt-center", targets = "_all"))))
+  temp_raw %>%
+    formatStyle(c("CheckFlag", "CheckNote"), backgroundColor = "yellow") # highlight yellow the editable columns
 })
+raw_proxyDT <- DT::dataTableProxy("table_raw")
 DTOutput("table_raw")
 tags$style("#table_raw{height:100vh;overflow-x:scroll;overflow-y:scroll}")
 ```
@@ -845,7 +926,7 @@ br()
 actionButton("button_recalcHeatMaps", "Recalculate Heat Maps", style="border-color:black; background-color: lightgreen; width:230px; border:0px; margin:0px")
 ```
 
-Heat Maps
+Threshold Heat Maps - Output
 -------------------------------------
 ```{r heat_maps_legend}
 renderPlot({
@@ -869,10 +950,48 @@ renderPlot({
     )
   )
   }, height = 60)
-
+ 
 renderPlotly({ # separate validation statements so they are checked in sequence
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = TRUE)
 
   rv$ThreshHeatMaps
 })
+```
+
+Flagged Data Records
+====================================== 
+```{r flagged_data}
+# renderUI({
+#   FuncOrderCheck(import = TRUE, filter = FALSE, plot = FALSE)
+#   if(any(!rv$userSelect$sel_Organization %in% rv$sitesPointsSub@data$OrganizationFormalName))
+#     {rv_param_temp$categLevels <- tibble("CharacteristicName" = as.character(), "CategOrder" =as.character(), "CategColor" = as.character())} # initiate a blank categorical levels data frame if the data have not been updated
+#   })
+# 
+# div(style="display:inline-block; width:100px; margin-right:10px;", actionButton("button_categAddRow", "Add a Row"))
+# div(style="display:inline-block; width:180px;", actionButton("button_categDeleteRow", "Delete Selected Row(s)"))
+# 
+# br()
+# 
+# br()
+# 
+# output$categDT <- DT::renderDT({rv_param_temp$categLevelsPlot}, editable = TRUE)
+# proxyDT <- DT::dataTableProxy("categDT")
+#     
+# dataTableOutput("categDT")
+# 
+# br()
+# 
+# br()
+# 
+# downloadLink("button_exportCateg", label = "Save table as .csv for future use")
+# 
+# output$button_exportCateg <- downloadHandler(
+#   filename = function() {
+#     return(paste0("WQdash_categ_", rv$parkID, "_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())),".csv"))
+#     },
+#   content = function(file) {
+#     write_csv(rv_param_temp$categLevelsPlot, file)
+#     }
+#   )
+
 ```
