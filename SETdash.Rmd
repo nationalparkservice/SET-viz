@@ -81,7 +81,7 @@ packages <- c("flexdashboard",
 
 package.check <- lapply(packages, FUN = function(x) {
   if (!require(x, character.only = TRUE)) {
-    install.packages(x, dependencies = TRUE)
+    install.packages(x, dependencies = TRUE, repos = "http://cran.us.r-project.org")
     library(x, character.only = TRUE)
   }
 })
@@ -200,7 +200,7 @@ FuncBreakDates <- function(dat) {
   return(dat)
 }
 
-FuncShinyCol <- function(func_type, pref, RecordID_vec, ...) {
+FuncShinyCol <- function(func_type, pref, RecordID_vec, default_value, ...) {
   # Function to create a vector-list of shiny input checkboxes
   #
   # Args:
@@ -212,7 +212,7 @@ FuncShinyCol <- function(func_type, pref, RecordID_vec, ...) {
   #
   inputs = character(length(RecordID_vec))
   for (i in seq_len(length(RecordID_vec))) {
-    inputs[i] = as.character(func_type(paste0(pref, RecordID_vec[i]), label = NULL, ...))
+    inputs[i] = as.character(func_type(paste0(pref, RecordID_vec[i]), label = NULL, value = switch(is.null(input[[paste0(pref, RecordID_vec[i])]])+1, input[[paste0(pref, RecordID_vec[i])]], default_value), ...)) # initial value is the default value unless it already has a prior value recorded 
     }
   return(inputs)
 }
@@ -520,8 +520,21 @@ observeEvent(eventExpr = input$button_CancelModal, {
   removeModal()
   })
 
+# (Home) Import and format data via SQL database download ----
+observeEvent(eventExpr = input$button_ImportSQL, {
+  # Still need to work through the logistics of wiring this up. Based on what I know so far this requires the user to
+  # have database permissions, the computer where the script is running to have a named ODBC connection, and some sort of
+  # selection of at least network (or you'd get data for all 5 networks).
+    { showModal(modalDialog(
+      title = "Future Feature!",
+      "Direct import of the data from the SQL database is a new feature that is under development!"))
+    }
+  }
+)
+
+
 # (Home) Import and format data ----
-observeEvent(eventExpr = input$button_GetData, {
+observeEvent(eventExpr = input$button_ImportCSV, {
   # Look for files of SET data
   SET_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*SET Data*")) 
   shiny::req(!is.null(SET_files_vec))
@@ -566,14 +579,14 @@ observeEvent(eventExpr = input$button_GetData, {
   #               placeholder = paste0("Sitename_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())))
   #               ),
   #     footer = tagList(
-  #       actionButton("button_goSave", "SAVE")
+  #       actionButton("button_GoSave", "SAVE")
   #     )
   #   ))
   })
   })
 
 # (Home) Save formatted files ----
-# observeEvent(input$button_goSave, {
+# observeEvent(input$button_GoSave, {
 #     saveRDS(isolate(reactiveValuesToList(rv)), paste0("Data_out/", input$out_prefix, ".RDS"))
 #     write_csv(rv$DataSET, paste0(here::here(), "/Data_out/", input$out_prefix, "_SET_formatted.csv"))
 #     write_csv(rv$DataStation, paste0(here::here(), "/Data_out/", input$out_prefix, "_station_formatted.csv"))
@@ -632,7 +645,7 @@ showModal(modalDialog(
 })
 
 # (Heat maps) # Recalculate heat maps ----
-observeEvent(eventExpr = input$button_recalcHeatMaps, { 
+observeEvent(eventExpr = input$button_RecalcHeatMaps, { 
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
   withProgress(message = "Calculating heat maps...", value = 0, {
     
@@ -757,14 +770,19 @@ This dashboard is a resource for lorem ipsum dolor sit amet, consectetur adipisc
 
 <font size="4">1.  Place .csv data files in the 'Data_in' folder. Every data file must have one of these text strings in the file name: 'Marker Data.csv', 'SET Data.csv', or 'Station Data.csv'.</font>
 
-<font size="4">2.  Click the green 'Get Data' button at the bottom of this page.</font>
+<font size="4">2.  Click the green 'Import Data... (from CSV or SQL)' button at the bottom of this page.</font>
 
 <font size="4">3.  Navigate to the other dashboard pages to view summary tables, graphs, and maps of the data.</font>
 
 <br>
 
 ```{r}
-actionButton("button_GetData", "Get Data", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+actionButton("button_ImportCSV", "Import Data from CSV Files", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+```
+
+
+```{r}
+actionButton("button_ImportSQL", "Import Data from the SQL Database", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
 ```
 
 Column {data-width=10}
@@ -883,8 +901,8 @@ output$table_raw = DT::renderDataTable({
   shiny::req(!is.null(rv$SubDataSETRaw))
   
   cbind(
-    CheckFLAG = FuncShinyCol(func_type = checkboxInput, pref = "UserFlag_", RecordID_vec =  rv$SubDataSETRaw$RecordID, value = FALSE),
-    CheckNOTES = FuncShinyCol(func_type = textInput, pref = "UserNotes_", RecordID_vec =  rv$SubDataSETRaw$RecordID, value = ""),
+    CheckFLAG = FuncShinyCol(func_type = checkboxInput, pref = "UserFlag_", RecordID_vec =  rv$SubDataSETRaw$RecordID, default_value = FALSE),
+    CheckNOTES = FuncShinyCol(func_type = textInput, pref = "UserNotes_", RecordID_vec =  rv$SubDataSETRaw$RecordID, default_value = ""),
     rv$SubDataSETRaw)},
   server = FALSE,
   escape = FALSE,
@@ -1011,7 +1029,7 @@ renderUI({
 
 br()
 
-actionButton("button_recalcHeatMaps", "Recalculate Heat Maps", style="border-color:black; background-color: lightgreen; width:230px; border:0px; margin:0px")
+actionButton("button_RecalcHeatMaps", "Recalculate Heat Maps", style="border-color:black; background-color: lightgreen; width:230px; border:0px; margin:0px")
 ```
 
 Threshold Heat Maps - Output
@@ -1057,8 +1075,8 @@ Flagged Data Records
 #     {rv_param_temp$categLevels <- tibble("CharacteristicName" = as.character(), "CategOrder" =as.character(), "CategColor" = as.character())} # initiate a blank categorical levels data frame if the data have not been updated
 #   })
 # 
-# div(style="display:inline-block; width:100px; margin-right:10px;", actionButton("button_categAddRow", "Add a Row"))
-# div(style="display:inline-block; width:180px;", actionButton("button_categDeleteRow", "Delete Selected Row(s)"))
+# div(style="display:inline-block; width:100px; margin-right:10px;", actionButton("button_CategAddRow", "Add a Row"))
+# div(style="display:inline-block; width:180px;", actionButton("button_CategDeleteRow", "Delete Selected Row(s)"))
 # 
 # br()
 # 
@@ -1073,9 +1091,9 @@ Flagged Data Records
 # 
 # br()
 # 
-# downloadLink("button_exportCateg", label = "Save table as .csv for future use")
+# downloadLink("button_ExportCateg", label = "Save table as .csv for future use")
 # 
-# output$button_exportCateg <- downloadHandler(
+# output$button_ExportCateg <- downloadHandler(
 #   filename = function() {
 #     return(paste0("WQdash_categ_", rv$parkID, "_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())),".csv"))
 #     },
