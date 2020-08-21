@@ -12,13 +12,14 @@ runtime: shiny
 # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
 ### PICK UP FROM HERE
-# User can edit the CheckFlag and CheckNote columns in Raw Data File--I'm having trouble accessing the RecordID to make that change
+# got it--saved as input$Flag_(recordID) and input$Notes_recordID), with the latter being inputTExt. Need to use that information to update the subdatasetraw in real time
+# User can edit the CheckFLAGS and CheckNOTES columns in Raw Data File--I'm having trouble accessing the RecordID to make that change
 # Records Export Page 
 # >> side panel allows user to choose which columns to view (and export). 
-# >> User can edit CheckFlag and CHeckNote columns here. (User can use filter columns to show only flagged records or only above/below threshold records...)--this is where the Save-as-csv option should be, not at the data import stage.
+# >> User can edit CheckFLAGS and CHeckNote columns here. (User can use filter columns to show only flagged records or only above/below threshold records...)--this is where the Save-as-csv option should be, not at the data import stage.
 # >> Button to export records in NERRS format
-# User can click a cell on the heatmaps page to flag a record and add a CheckNote--click again to unflag. Cell text should be bold and larger when flagged.
-# I think I should allow user to save the CheckNotes and CheckFlag data in .RDS for later processing.
+# User can click a cell on the heatmaps page to flag a record and add a CheckNOTES--click again to unflag. Cell text should be bold and larger when flagged.
+# I think I should allow user to save the CheckNOTES and CheckFLAGS data in .RDS for later processing.
 
 
 ### NOTES
@@ -170,8 +171,13 @@ FuncImportList <- function(filepaths_vec, colnames_start = "Park,Park_Code,Site_
     dplyr::distinct(.keep_all = TRUE) %>% # if there are any exactly duplicated records, only keep one
     janitor::clean_names(case = "upper_camel") %>% # convert all column names to upper camel style
     dplyr::arrange(Park, SiteName, StationName, PipeDirection, PinPosition, EventDate) %>%
-    dplyr::mutate(RecordID = row_number()) %>% # add a unique ID to each record
-    dplyr::select(RecordID, everything()) # put the 'RecordID' column first
+    dplyr::mutate(
+      # CheckFLAG = FALSE,
+      # CheckNOTES = NA, # add a notes column for user to edit in dashboard
+      RecordID = row_number()) %>% # add a unique ID to each record
+    # dplyr::select(CheckFLAG, CheckNOTES, RecordID, everything()) # arrange column order
+    dplyr::select(RecordID, everything()) 
+  # combined_file$CheckNOTES <- as.character(combined_file$CheckNOTES) # otherwise will assign it class of logical
   return(combined_file)
 }
 
@@ -194,6 +200,40 @@ FuncBreakDates <- function(dat) {
   return(dat)
 }
 
+FuncShinyCol <- function(func_type, pref, RecordID_vec, ...) {
+  # Function to create a vector-list of shiny input checkboxes
+  #
+  # Args:
+  #   func_type:  Shiny input function, e.g., checkboxInput
+  #   init_value_vec:  The data class should be consistent with the shiny function
+  #
+  # Returns:
+  #   A shiny vector in list format
+  #
+  inputs = character(length(RecordID_vec))
+  for (i in seq_len(length(RecordID_vec))) {
+    inputs[i] = as.character(func_type(paste0(pref, RecordID_vec[i]), label = NULL, ...))
+    }
+  return(inputs)
+}
+
+FuncShinyVals <- function(value_list, null_value) {
+  # Function to extract values from a shiny vector in list format
+  #
+  # Args:
+  #   id:   Prefix identifier for each vector element
+  #   value_vec:  The vector of initial values. Should be as long as length of vector, and data class should be consistent with the shiny function
+  #
+  # Returns:
+  #   A vector of data values
+  #
+  
+  unlist(lapply(value_vec, function(i) {
+        value = input[[i]]
+        if (is.null(value)) null_value else value
+        }))
+  }
+
 FuncCalcChange <- function(dat) {
   # Function to calculate change per year for pin height
   #
@@ -211,36 +251,35 @@ FuncCalcChange <- function(dat) {
       ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 2)
     ) %>%
     dplyr::ungroup()
-  temp_dat$CheckFlag = FALSE # so user can flag the record for export
-  temp_dat$CheckNote = NA # so user can add notes for export
   
   return(temp_dat)
 }
   
-# FuncUpdateCheckCols = function(input_edit, output_edit, proxyDT) {
-#   # Function to update the CheckFlag or CheckNote columns of rv$DataSET
+# FuncUpdateCheckCols = function(input_edit, output_table, proxyDT) {
+#   # Function to update the Check columns of rv$DataSET
 #   #
 #   # Args:
 #   #   input_edit: The reactive input for edited DT cell, e.g., input$raw_table_cell_edit. Must begin with 'input$' and end with '_cell_edit'
-#   #   output_edit: The data frame to be updated, e.g., rv$SubDataSETRaw
 #   #   proxyDT:  The name of the proxy data table, e.g., raw_proxyDT
 #   #
 #   # Returns:
-#   #   Updates the output data frame and also rv$DataSET
+#   #   Updates rv$DataSET
 #   #
 #   info = input_edit
 #   i = info$row
 #   j = info$col
 #   v = info$value
-#   
-#   output_edit[i, j] <<- DT::coerceValue(v, isolate(output_edit[i, j]))
-#   replaceData(proxyDT, output_edit, resetPaging = FALSE)
-#   ID_change <- output_edit$RecordID[i]
-#   col_change <- names(output_edit)[j]
-#   rv$DataSET[rv$DataSET$RecordID==ID_change, col_change] <- v
-#   
-#   saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-# saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+# 
+#   ID_change <- rv$SubDataSETRaw$RecordID[i]
+#   if(j == 0) { # edit in CheckFLAG
+#     rv$DataSET[rv$DataSET$RecordID==ID_change, "CheckFLAG"] <<- DT::coerceValue(v, rv$DataSET[rv$DataSET$RecordID==ID_change, "CheckFLAG"])
+#     replaceData(proxyDT, output_table, resetPaging = FALSE)
+#   }
+#     
+#   if(j == 1) { # edit in CheckNOTES
+#   rv$DataSET[rv$DataSET$RecordID==ID_change, "CheckNOTES"] <<- DT::coerceValue(v, rv$DataSET[rv$DataSET$RecordID==ID_change, "CheckNOTES"]) # update in the raw 
+#   replaceData(proxyDT, output_table, resetPaging = FALSE)
+#   }
 # }
 
 FuncCalcQuant <- function(dat) {
@@ -646,7 +685,7 @@ renderUI({
   shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park), !is.null(input$sel_YrRange[1]), !is.null(input$sel_YrRange[2]), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
 
 temp_subdata <- rv$DataSET %>%
-  dplyr::filter(Park == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType)
+  dplyr::filter(Park == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType) 
 
   shiny::req(!is.null(temp_subdata))
   shiny::req(nrow(temp_subdata) > 0)
@@ -667,14 +706,24 @@ temp_subdata <- rv$DataSET %>%
 
   rv$SubDataSET <- as.data.frame(temp_subdata)
   rv$SubDataSummary <- as.data.frame(temp_summary)
-
+  
   Sys.sleep(0.25) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
   })
 
-# Update CheckFlag and CheckNote columns ----
+# Update CheckNOTES columns ----
 # observeEvent(input$table_raw_cell_edit, {
-#   FuncUpdateCheckCols(input_edit = input$table_raw_cell_edit, output_edit = rv$SubDataSETRaw, proxyDT = raw_proxyDT)
+#   FuncUpdateCheckCols(input_edit = input$table_raw_cell_edit, output_table = rv$SubDataSETRaw, proxyDT = raw_proxyDT)
 #   })
+
+# Table of selected station ----
+renderUI({
+  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary), !is.null(input$table_summary_rows_selected))
+
+  rv$SubDataSETRaw <- rv$SubDataSET %>%
+    dplyr::mutate(StationName = as.character(StationName)) %>%
+    dplyr::filter(StationName ==  rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]) %>% # user-selected station
+    dplyr::select(-Yr, -Mnth, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
+})
 ```
   
 HOME
@@ -829,29 +878,68 @@ renderUI({
 
 ### Selected Raw Data
 ```{r selected_raw_data}
-output$table_raw <- DT::renderDT({
+output$table_raw = DT::renderDataTable({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
- 
-  shiny::req(!is.null(input$table_summary_rows_selected))
-  rv$SubDataSETRaw <- rv$SubDataSET %>%
-      dplyr::mutate(StationName = as.character(StationName)) %>%
-      dplyr::filter(StationName ==  rv$SubDataSummary[input$table_summary_rows_selected, "StationName"]) %>% # user-selected station
-      dplyr::select(-Yr, -Mnth, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
+  shiny::req(!is.null(rv$SubDataSETRaw))
   
-  temp_raw <- DT::datatable(
-    rv$SubDataSETRaw, # show only the original raw data columns, not newly calculated columns
-    filter = "top",
-    rownames = FALSE,
-    selection = "none",
-    editable = list(target = "cell", disable = list(columns = which(!names(rv$SubDataSETRaw) %in% c("CheckFlag", "CheckNote"))-1)), # column count starts at zero
-    options = list(
-      columnDefs = list(list(className = "dt-center", targets = "_all"))))
-  temp_raw %>%
-    formatStyle(c("CheckFlag", "CheckNote"), backgroundColor = "yellow") # highlight yellow the editable columns
-})
-raw_proxyDT <- DT::dataTableProxy("table_raw")
-DTOutput("table_raw")
+  cbind(
+    CheckFLAG = FuncShinyCol(func_type = checkboxInput, pref = "UserFlag_", RecordID_vec =  rv$SubDataSETRaw$RecordID, value = FALSE),
+    CheckNOTES = FuncShinyCol(func_type = textInput, pref = "UserNotes_", RecordID_vec =  rv$SubDataSETRaw$RecordID, value = ""),
+    rv$SubDataSETRaw)},
+  server = FALSE,
+  escape = FALSE,
+  filter = "top",
+  rownames = FALSE,
+  selection = "none",
+  # editable = list(target = "cell", disable = list(columns = c(0, 2:ncol(rv$SubDataSETRaw)))), # column count starts at zero so the CheckNOTES column is at 1.
+  options = list(
+    columnDefs = list(
+        list(className = "dt-center", targets = "_all")),
+    dom = 't', paging = FALSE, ordering = FALSE,
+    preDrawCallback = JS('function() { Shiny.unbindAll(this.api().table().node()); }'),
+    drawCallback = JS('function() { Shiny.bindAll(this.api().table().node()); } ')
+  )
+  )
+
+# output$table_raw <- DT::renderDT({
+#   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
+#   shiny::req(!is.null(rv$SubDataSETRaw))
+#   
+#   temp_raw <- DT::datatable(
+#     rv$SubDataSETRaw,
+#     filter = "top",
+#     rownames = FALSE,
+#     selection = "none",
+#     editable = list(target = "cell", disable = list(columns = which(names(rv$SubDataSETRaw) != "CheckNOTES"))), # column count starts at zero but since we are adding the initial CheckFLAG column, can just use this column count to edit the CheckNOTES column.
+#     options = list(
+#       columnDefs = list(
+#         list(className = "dt-center", targets = "_all"))))
+#   
+#   temp_raw %>%
+#     formatStyle(c("CheckNOTES"), backgroundColor = "yellow") # highlight yellow the editable column
+#   })
+# raw_proxyDT <- DT::dataTableProxy("table_raw")
+dataTableOutput("table_raw")
 tags$style("#table_raw{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+Check
+-------------------------------------
+### Check
+```{r}
+
+shinyValue = function(pref) {
+  unlist(lapply(seq_len(2000), function(i) {
+        value = input[[paste0(pref, i)]]
+        if (is.null(value)) NA else value
+      }))
+}
+
+renderPrint({
+  data.frame(
+    CheckFLAG = shinyValue(pref = "UserFlag_"),
+    CheckNOTES = shinyValue(pref = "UserNotes_"))
+})
 ```
 
 Threshold Heat Maps
@@ -930,6 +1018,8 @@ Threshold Heat Maps - Output
 -------------------------------------
 ```{r heat_maps_legend}
 renderPlot({
+  saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
   shiny::req(!is.null(rv$ThreshDataSET), !is.null(rv$ThreshHeatMaps))
   
   discrete_cols <- c("#ffd700", "#add8e6", "#ffa500")
