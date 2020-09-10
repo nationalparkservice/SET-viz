@@ -70,7 +70,7 @@ packages <- c("flexdashboard",
               "stringr", # to detect text snippets
               "tmaptools", # for flexible color mapping
               "DT", # for interactive tables
-              "zoo", # for year-month
+              "zoo", # for year-month and carry-forward NA's for lag
               "cowplot", # to get legends from plots
               "gridExtra", # for arranging plots and adding plot annotations (ggplotly can't do captions or subtitles)
               "RgoogleMaps", # for MaxZoom & MinZoom
@@ -112,7 +112,7 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 ```
 
 ```{r startup}
-rv <- reactiveValues(DataSET = NULL, CheckStatus = NULL, CheckCols = NULL, DataStation = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, PickList = NULL, ThreshHeatPlots = NULL, MapDat = NULL)
+rv <- reactiveValues(DataSET = NULL, CheckStatus = NULL, CheckCols = NULL, DataStation = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, PickList = NULL, ThreshHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "chartreuse", "lightpink", "honeydew2") # Colorblind-friendly palette that will be used throughout
 ```
@@ -241,11 +241,6 @@ FuncParkBoundaries <- function(park_vec) {
     unlink("tempUnit.geojson")
 }
 
-shinyValue = function(inputID, default) {
-    value = input[[inputID]]
-    if (is.null(value)) default_val else value
-}
-
 FuncCalcChange <- function(dat) {
   # Function to calculate change per year for pin height
   #
@@ -253,15 +248,19 @@ FuncCalcChange <- function(dat) {
   #   dat:  A SET data frame output from FuncBreakDates
   #
   # Returns:
-  #   A data frame with an additional column calculating change in pin height per year
+  #   A data frame with an additional column calculating change in pin height per year. When prior survey is NA, will calculate pin difference and date difference from the last non-NA pin height.
   #
+  dat$TempEventDate <- dat$EventDate # need this to calculate DIffDays correctly (skipping the NA dates, but still need EventDate to order the readings correctly)
+  dat$TempEventDate[is.na(dat$PinHeightMm1)] <- NA
   temp_dat <- dat %>%
     dplyr::group_by(Park, ParkCode, SiteName, StationName, PipeDirection, PinPosition) %>%
+    dplyr::arrange(EventDate) %>%
     dplyr::mutate(
-      DiffMMHeight = PinHeightMm1 - dplyr::lag(PinHeightMm1, order_by = EventDate),
-      DiffDays = EventDate - dplyr::lag(EventDate, order_by = EventDate),
+      DiffMMHeight = PinHeightMm1 - zoo::na.locf(dplyr::lag(PinHeightMm1, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
+      DiffDays = TempEventDate - zoo::na.locf(dplyr::lag(TempEventDate, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
       ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 2)
     ) %>%
+    dplyr::select(-TempEventDate) %>%
     dplyr::ungroup()
   
   return(temp_dat)
@@ -372,7 +371,6 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
   rel_hts <- (temp_distinct %>% dplyr::count(StationName) %>% pull(n))/nrow(temp_distinct)
   
   heat_station_list <- vector("list", length = length(unique(dat2$StationName))) # each list element is a station
-  
   
  heat_station_list <- lapply(sort(unique(dat2$StationName)), function(i) {
     
@@ -565,6 +563,25 @@ FuncOrderCheck <- function(import = TRUE, examine = TRUE, plot = TRUE) {
       need(!is.null(rv$ThreshHeatPlots), message = "Please first enter thresholds criteria for the heat plots, then click the green 'Recalculate Thresholds' button"))
   }
 }
+
+FuncFormatSET_NERRs <- function(dat) {
+  temp_NERRs <- dat %>%
+    dplyr::filter(ParkCode %in% input$sel_ExportParks) %>%
+    dplyr::mutate(
+      reserve = ParkCode,
+      set_id = paste0(StationName, "_Pipe", PipeDirection),
+      year = lubridate::year(EventDate),
+      month = lubridate::month(EventDate),
+      day = lubridate::day(EventDate),
+      arm_position = PipeDirection,
+      arm_qaqc_code = NA,
+      pin_number = paste0("pin_", PinPosition),
+      height_mm = PinHeightMm1,
+      qaqc_code = NA) %>%
+    dplyr::select(reserve, set_id, year, month, day, arm_position, arm_qaqc_code, pin_number, height_mm, qaqc_code)
+  return(temp_NERRs)
+}
+  
 ```
 
 ```{r action_buttons}
@@ -619,7 +636,8 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     
     # Combine SET data in a single file
     unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-    temp_SET <- FuncImportList(filepaths_vec = SET_files_vec, is_SET = TRUE) %>% dplyr::filter(!is.na(StationName) & !is.na(EventDate) & !is.na(PipeDirection) & !is.na(PinPosition)  & !is.na(PinHeightMm1)) # remove records without result recorded in these important columns >>>>>>>>>>>>>>>>>>> REDO WITH complete.cases
+    temp_SET <- FuncImportList(filepaths_vec = SET_files_vec, is_SET = TRUE) 
+    # %>% dplyr::filter(!is.na(StationName) & !is.na(EventDate) & !is.na(PipeDirection) & !is.na(PinPosition)  & !is.na(PinHeightMm1)) # remove records without result recorded in these important columns >>>>>>>>>>>>>>>>>>> REDO WITH complete.cases
     
     factor_cols <- c("Park", "ParkCode", "SiteName", "StationName", "PipeDirection", "PinPosition", "DataProcessingLevel", "ObservationType1", "PinFlag")
     temp_SET[factor_cols] <- lapply(temp_SET[factor_cols], factor) # convert to factors so can use drop-down lists in data tables
@@ -627,10 +645,10 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_SET2))
     rv$DataStation <- as.data.frame(FuncImportList(filepaths_vec = station_files_vec))
     
-    shiny::req(!is.null(rv$DataSET))
-    
-    incProgress(2/3, detail = "...getting park unit boundaries from IRMA")
-    FuncParkBoundaries(park_vec = sort(unique(rv$DataSET$ParkCode)))
+    # shiny::req(!is.null(rv$DataSET))
+    # 
+    # incProgress(2/3, detail = "...getting park unit boundaries from IRMA")
+    # FuncParkBoundaries(park_vec = sort(unique(rv$DataSET$ParkCode)))
     
     Sys.sleep(0.25)
   showModal(modalDialog(
@@ -662,8 +680,9 @@ observeEvent(eventExpr = input$button_RunDataCheck, {
 withProgress(message = "Generating data check report...", value = 0, { # show progress bar
     
     check_sub <- rv$SubDataSET %>%
-      dplyr::select(-SetDirectionNotes) %>%
-      dplyr::mutate(StationName = as.character(StationName)) %>%
+      dplyr::select(-CheckNOTES, -RecordID, -SetDirectionNotes, -DiffMMHeight, -DiffDays, -ChangeMMPerYear) %>%
+      dplyr::mutate(StationName = as.character(StationName),
+                    EventDate = as.character(EventDate)) %>%
       dplyr::filter(StationName == rv$SubDataSummary[input$out_TableSummary_rows_selected, "StationName"])
 
     shiny::req(!is.null(check_sub))
@@ -691,7 +710,6 @@ showModal(modalDialog(
 
 # (Thresholds) # Recalculate thresholds ----
 observeEvent(eventExpr = input$button_RecalcThresholds, { 
-      
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
   withProgress(message = "Just a moment...", detail = "...calculating thresholds", value = 0, {
     
@@ -719,11 +737,10 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     
     # Count threshold levels
     rv$ThreshCounts <- rv$ThreshDataSET %>%
-    dplyr::select(RecordID, ParkCode, SiteName, StationName, EventDate, DiffDays, LowerCutoff, UpperCutoff, Level) %>%
-    # dplyr::filter(EventDate != min(EventDate, na.rm = TRUE)) %>%
-    dplyr::group_by(ParkCode, SiteName, StationName, EventDate, DiffDays, LowerCutoff, UpperCutoff, Level, .drop = FALSE) %>%
+    dplyr::select(RecordID, ParkCode, SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level) %>%
+    dplyr::group_by(ParkCode, SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level, .drop = FALSE) %>%
     dplyr::summarise(N = n()) %>%
-    dplyr::mutate(HoverLabel = paste0("Park: ", ParkCode, "<br>Station: ", StationName, "<br>Date: ", EventDate, "<br>Days Diff: ", DiffDays, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>LEVEL: ", Level, "<br>COUNT: ", N))
+    dplyr::mutate(HoverLabel = paste0("Park: ", ParkCode, "<br>Station: ", StationName, "<br>Date: ", EventDate, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>LEVEL: ", Level, "<br>COUNT: ", N))
     
     # Create map
     shiny::req(!is.null(rv$ThreshCounts), !is.null(rv$DataStation))
@@ -736,9 +753,6 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     })
   
   Sys.sleep(2)
-  
-  saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 })
 ```
 
@@ -804,7 +818,38 @@ renderUI({
     dplyr::select(-Yr, -Mnth, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
 })
 ```
-  
+ 
+```{r page_export_NERRs}
+renderUI({
+  if(!is.null(rv$DataSET)) {
+    shinyjs::showElement("wp_NERRs")
+    } else {
+      shinyjs::hideElement("wp_NERRs")
+    }
+})
+
+renderUI({
+  shiny::req(!is.null(input$sel_ExportParks), !is.null(rv$DataSET))
+  rv$DataSET_NERRs <- FuncFormatSET_NERRs(dat = rv$DataSET)
+saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+})
+
+output$button_exportNERRs <- downloadHandler(
+    filename = function() {
+      return(paste0("SET_forNERRs_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())),".csv"))
+      },
+    content = function(file) {
+      write_csv(rv$DataSET_NERRs, file)
+    }
+    
+    showModal(modalDialog(
+      title = "Done",
+      "The data for NERRs Shiny use have been saved in the selected location."
+    ))
+    )
+```
+    
 HOME
 =========================================
 
@@ -840,15 +885,13 @@ This dashboard is a resource for lorem ipsum dolor sit amet, consectetur adipisc
 
 <font size="4">3.  Navigate to the other dashboard pages to view summary tables, graphs, and maps of the data.</font>
 
-<br>
-
 ```{r}
-actionButton("button_ImportCSV", "Import Data from CSV Files", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+actionButton("button_ImportCSV", "Import Data from CSV Files", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px;") # width:350px;
 ```
 
 
 ```{r}
-actionButton("button_ImportSQL", "Import Data from the SQL Database", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px")
+actionButton("button_ImportSQL", "Import Data from the SQL Database", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px;") # width:350px;
 ```
 
 Column {data-width=10}
@@ -968,12 +1011,11 @@ output$out_TableRaw = DT::renderDT({
 
   temp_raw <- DT::datatable(
     rv$SubDataSETRaw,
-    server = FALSE,
     escape = FALSE,
     filter = "top",
     rownames = FALSE,
     selection = "none",
-    editable = list(target = "cell", disable = list(columns = c( 1:ncol(rv$SubDataSETRaw)-1))), 
+    editable = list(target = "cell", disable = list(columns = c(1:ncol(rv$SubDataSETRaw)))), 
     options = list(
       autoWidth = TRUE,
       columnDefs = list(
@@ -1049,11 +1091,11 @@ renderUI({
     condition = "(input.sel_ThresholdType == 'numb')",
     numericInput("sel_ThresholdLower",
                  label = "Enter lower limit",
-                 value = -12,
+                 value = -20,
                  min = 0.0),
     numericInput("sel_ThresholdUpper",
                  label = "Enter upper limit",
-                 value = 12,
+                 value = 20,
                  min = 0.0)
   )
 })
@@ -1069,7 +1111,7 @@ renderUI({
   
   map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$Longitude, na.rm = TRUE), latrange = range(rv$MapDat$Latitude, na.rm = TRUE)))
   
-  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = 20, value = map_zoom - 1, step = 0.25, ticks = FALSE, dragRange = FALSE, width = "95%")
+  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = 20, value = map_zoom - 1, step = 0.5, ticks = FALSE, dragRange = FALSE, width = "95%")
 })
 
 renderUI({
@@ -1139,7 +1181,7 @@ output$out_ThreshMap <- renderLeaflet({
   
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = TRUE)
   
-  shiny::req(!is.null(rv$MapDat), !is.null(rv$UnitPoly), !is.null(input$sel_MapZoom), !is.null(input$sel_MapPieSize))
+  shiny::req(!is.null(rv$MapDat), !is.null(input$sel_MapZoom), !is.null(input$sel_MapPieSize)) # !is.null(rv$UnitPoly), 
   
   discrete_cols = c("#ffd700", "#add8e6", "#ffa500")
   discrete_levels = c("below", "between(inclusive)", "above")
@@ -1150,7 +1192,7 @@ output$out_ThreshMap <- renderLeaflet({
   
   thresh_map <- leaflet() %>%
     addProviderTiles("Esri.WorldImagery", options = providerTileOptions(noWrap = TRUE)) %>%
-    addPolygons(data = rv$UnitPoly[rv$UnitPoly@data$UNIT_CODE == unique(rv$MapDat$ParkCode),], layerId = rv$UnitPoly@data$UNIT_CODE, stroke = TRUE, color = "white", weight = 1, opacity = 1, fillOpacity = 0) %>% # park unit outline
+    # addPolygons(data = rv$UnitPoly[rv$UnitPoly@data$UNIT_CODE == unique(rv$MapDat$ParkCode),], layerId = rv$UnitPoly@data$UNIT_CODE, stroke = TRUE, color = "white", weight = 1, opacity = 1, fillOpacity = 0) %>% # park unit outline
     addScaleBar() %>% 
     addMinicharts(
       lng = rv$MapDat$Longitude,
@@ -1172,20 +1214,42 @@ tags$style("#out_ThreshMap {height: calc(100vh - 100px) !important;}")
 leafletOutput('out_ThreshMap', height="100%", width = "100%")
 ```
 
-Export Data
+Export Data for NERRs
 ====================================== 
-```{r export_data}
 
-# 
-# downloadLink("button_ExportCateg", label = "Save table as .csv for future use")
-# 
-# output$button_ExportCateg <- downloadHandler(
-#   filename = function() {
-#     return(paste0("WQdash_categ_", rv$parkID, "_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())),".csv"))
-#     },
-#   content = function(file) {
-#     write_csv(rv_param_temp$categLevelsPlot, file)
-#     }
-#   )
+Inputs {.sidebar data-width=250}
+-------------------------------------
+```{r input_NERRs}  
+renderUI({
+  shiny::req(!is.null(rv$DataSET))
+  checkboxGroupInput("sel_ExportParks",
+    label = "Include data for these Parks: ",
+    choices = sort(unique(rv$DataSET$ParkCode)),
+    selected = sort(unique(rv$DataSET$ParkCode))
+    )
+  })
+    
+downloadLink("button_exportNERRs", label = "Export SET data for NERRs")
+```
 
+Data for NERRs - Outputs
+-------------------------------------
+  
+### Data Formatted for NERRs
+
+```{r NERRs}
+
+output$out_NERRs <- DT::renderDT({
+  FuncOrderCheck(import = TRUE, examine = FALSE, plot = FALSE)
+  shiny::req(!is.null(rv$DataSET_NERRs))
+  temp_NERRs <- DT::datatable(
+    rv$DataSET_NERRs,
+    filter = "top",
+    rownames = FALSE,
+    options = list(
+      columnDefs = list(list(className = "dt-center", targets = "_all"))))
+})
+
+DTOutput("out_NERRs")
+tags$style("#out_NERRs{height:100vh;overflow-x:scroll;overflow-y:scroll}")
 ```
