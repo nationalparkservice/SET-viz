@@ -261,7 +261,7 @@ FuncCalcChange <- function(dat) {
       # DiffDays = TempEventDate - zoo::na.locf(dplyr::lag(TempEventDate, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
       DiffMMHeight = PinHeightMm1 - dplyr::lag(PinHeightMm1),
       DiffDays = TempEventDate - dplyr::lag(TempEventDate),
-      ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 2)
+      ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 1)
     ) %>%
     dplyr::select(-TempEventDate) %>%
     dplyr::ungroup()
@@ -289,24 +289,25 @@ FuncUpdateCheckCols = function(input_edit, output_table, proxyDT) {
 
 }
 
-FuncCalcQuant <- function(dat, unit) {
+FuncCalcQuant <- function(dat, sel_unit) {
   # Function to classify ChangeMMPerYear by user-specified groups and quantiles
   #
   # Args:
   #   dat:  A filtered SET data frame for the selected site
+  #   sel_unit:  Metric to calculate threshold categories on
   #
   # Returns:
   #   A data frame with an additional columns classifying ChangeMMPerYear relative to specified quantiles per group
   #
   dat <- droplevels(dat)
-  names(dat)[names(dat) == unit] <- "unit"
+  names(dat)[names(dat) == sel_unit] <- "Unit"
   dat %<>% dplyr::mutate(
     GroupingVar = switch(input$sel_QuantileGroup,
                          "site" = SiteName,
                          "station" = StationName)) 
   quant_list <- dat %>%
     dplyr::group_by(GroupingVar) %>%
-  group_map(~ quantile(.x$unit, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
+  group_map(~ quantile(.x$Unit, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
   quant_df <- data.frame(do.call("rbind", quant_list))
   names(quant_df) <- c("LowerCutoff", "UpperCutoff")
   quant_df$GroupingVar <- levels(dat$GroupingVar)
@@ -314,34 +315,35 @@ FuncCalcQuant <- function(dat, unit) {
   dat2 <- dat %>%
     dplyr::left_join(quant_df, by = "GroupingVar") %>%
     dplyr::mutate(Level = ifelse(
-      unit < LowerCutoff, "below", ifelse(
-        unit > UpperCutoff, "above", "between(inclusive)"))) %>%
+      Unit < LowerCutoff, "below", ifelse(
+      Unit > UpperCutoff, "above", "between(inclusive)"))) %>%
     dplyr::select(-GroupingVar)
   dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
-  names(dat)[names(dat) == "unit"] <- unit
+  names(dat)[names(dat) == "Unit"] <- sel_unit
   return(dat2)
   }
 
-FuncCalcThresh <- function(dat, unit) {
+FuncCalcThresh <- function(dat, sel_unit) {
   # Function to classify ChangeMMPerYear by user-specified numeric thresholds
   #
   # Args:
   #   dat:  A filtered SET data frame for the specified site
+  #   sel_unit:  Metric to calculate threshold categories on
   #
   # Returns:
   #   A data frame with an additional column classifying ChangeMMPerYear relative to specified thresholds
   #
   dat <- droplevels(dat)
-  names(dat)[names(dat) == unit] <- "unit"
+  names(dat)[names(dat) == sel_unit] <- "Unit"
   dat2 <- dat %>% 
     dplyr::mutate(
     LowerCutoff = input$sel_ThresholdLower,
     UpperCutoff = input$sel_ThresholdUpper,
     Level = ifelse(
-      unit < LowerCutoff, "below", ifelse(
-        unit > UpperCutoff, "above", "between(inclusive)")))
+      Unit < LowerCutoff, "below", ifelse(
+      Unit > UpperCutoff, "above", "between(inclusive)")))
   dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
-  names(dat2)[names(dat2) == "unit"] <- unit
+  names(dat2)[names(dat2) == "Unit"] <- sel_unit
   return(dat2)
 }
   
@@ -388,7 +390,7 @@ FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess
     
     # Final formatting of plots
     p1_points <- p1_points +
-      scale_y_continuous(trans = trans_y, labels = function(x) as.character(round(x,2)), breaks = pretty_breaks(), limits = c(yaxes_min, yaxes_max)) + # alternatively, can use 'coord_cartesian(ylim = c(axes_min, axes_max))' to zoom in to the limits rather than "cutting off" the limits, as setting limits within scale_y_continuous() would do 
+      scale_y_continuous(trans = trans_y, labels = function(x) as.character(round(x,1)), breaks = pretty_breaks(), limits = c(yaxes_min, yaxes_max)) + # alternatively, can use 'coord_cartesian(ylim = c(axes_min, axes_max))' to zoom in to the limits rather than "cutting off" the limits, as setting limits within scale_y_continuous() would do 
       theme_bw(base_size = 11) +
       {if(rotate_x) {theme(axis.text.x = element_text(angle = 60, hjust = 1))}} +
       theme(axis.title.x = element_blank(),
@@ -422,12 +424,6 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
     dplyr::mutate(HoverLabel = paste0("Record ID: ", RecordID, "<br>Date: ", EventDate, "<br>Pin Flag: ", PinFlag, "<br>Set Direction Notes: ", SetDirectionNotes, "<br>Pin Position: ", PinPosition, "<br>Pin Height (mm): ", PinHeightMm1, "<br>Height Diff (mm): ", DiffMMHeight, "<br>Days Diff: ", DiffDays, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>CHANGE PER YR (mm): ", ChangeMMPerYear, "<br>LEVEL: ", Level)) %>%
     droplevels()
   
-  # Create discrete color scale
-  temp_seq <- seq(0,1, length.out = length(discrete_cols)+1)
-  rep_seq <- rep(temp_seq[c(-1, -length(temp_seq))], each = 2)
-  z = c(temp_seq[1], rep_seq, temp_seq[length(temp_seq)])
-  color_scale <- data.frame(z=z,col=rep(discrete_cols, each = 2)) # the default color for NA is white
-  
   # Calculate total and relative heights
   temp_distinct <- dat2 %>% 
     dplyr::select(StationName, PipeDirection, PinPosition) %>%
@@ -447,16 +443,24 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
     pipe_dxn_list <- vector("list", length = length(unique(subdat$PipeDirection)))
     pipe_dxn_list <- lapply(sort(unique(subdat$PipeDirection)), function(j) { # subplot the pipe directions for a station
       subdat_pipe <- subset(subdat, PipeDirection == j)
-    
+  
     # create number matrix to put values in the heatmap cells
     template <- subdat_pipe %>%
       dplyr::select(PinPosition, EventDate) %>%
       expand(PinPosition, EventDate) %>%
-      left_join(subdat_pipe[c("PipeDirection", "PinPosition", "EventDate", "ChangeMMPerYear", "HoverLabel", "Level")], by = c("PinPosition", "EventDate")) %>%
+      left_join(subdat_pipe[c("PipeDirection", "PinPosition", "EventDate", "ChangeMMPerYear", "DiffMMHeight", "HoverLabel", "Level")], by = c("PinPosition", "EventDate")) %>%
       dplyr::arrange(EventDate, PinPosition)
-    txt <- matrix(template$ChangeMMPerYear, nrow=length(unique(template$PinPosition)))
-    txt[is.na(txt)] <- " " # convert NA to blank, otherwise it sill show as "new text"
+    txt <- matrix(pull(template, input$sel_CalcUnit), nrow=length(unique(template$PinPosition)))
+    txt[is.na(txt)] <- " " # convert NA to blank, otherwise it will show as "new text"
 
+        
+        # Create discrete color scale
+  use_cols <- discrete_cols[which(discrete_levels %in% unique(na.omit(template$Level)))]
+  temp_seq <- seq(0,1, length.out = length(use_cols)+1)
+  rep_seq <- rep(temp_seq[c(-1, -length(temp_seq))], each = 2)
+  z = c(temp_seq[1], rep_seq, temp_seq[length(temp_seq)])
+  color_scale <- data.frame(z=z,col=rep(use_cols, each = 2)) # the default color for NA is white
+  
     plot_ly(
       data = template, 
       source = "heat_plot",
@@ -571,7 +575,7 @@ FuncPlotlyPieMatrix <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#f
   
   for(s in 1:length(unique(dat$StationName))) {
     station <- sort(unique(dat$StationName))[s]
-    for(d in 1:length(unique(dat$EventDate))) { # first date is always NA's for change in pin height
+    for(d in 2:length(unique(dat$EventDate))) { # first date is always NA's for change in pin height
       survey_date <- sort(unique(dat$EventDate))[d]
       fig <- fig %>% 
         
@@ -671,6 +675,13 @@ observeEvent(eventExpr = input$button_ImportSQL, {
 
 # (Home) Import and format data from CSV ----
 observeEvent(eventExpr = input$button_ImportCSV, {
+  if(!dir.exists(file.path(here::here(), "Data_in"))) {
+    showModal(modalDialog(
+      title = "No 'Data_in' subfolder",
+      "Could not find a 'Data_in' subfolder. SET data for dashboard import must be placed in a 'Data_in' folder in the current working directory."
+    )
+    )
+  } else {
   # Look for files of SET data
   SET_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*SET Data*")) 
   shiny::req(!is.null(SET_files_vec))
@@ -681,7 +692,6 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     )
     )
   }
-  shiny::req(length(SET_files_vec) > 0)
   
   # Look for files of station data
   station_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*Station Data*")) 
@@ -692,8 +702,9 @@ observeEvent(eventExpr = input$button_ImportCSV, {
       "Could not find station data in the 'Data_in' folder. Station data file names must include the words 'Station Data'"
     )
     )
+    }
   }
-  shiny::req(length(station_files_vec) > 0)
+  shiny::req(length(SET_files_vec) > 0, length(station_files_vec) > 0)
   
   withProgress(message = "Just a moment", value = 0, {
     
@@ -726,9 +737,11 @@ observeEvent(eventExpr = input$button_ImportCSV, {
   
   observeEvent(input$button_goSave, {
     cat("line725")
-    saveRDS(isolate(reactiveValuesToList(rv)), paste0("Data_out/", input$out_prefix, ".RDS"))
+    if(!dir.exists(file.path(here::here(), "Data_out"))) {
+      dir.create(file.path(here::here(), "Data_out"))} # create a 'Data_out' subfolder if it doesn't exist
+    saveRDS(isolate(reactiveValuesToList(rv)), paste0(here::here("Data_out"), input$out_prefix, ".RDS"))
     cat("line725")
-    write_csv(rv$DataSET, paste0("Data_out/", input$out_prefix, ".csv"))
+    write_csv(rv$DataSET, paste0(here::here("Data_out"), input$out_prefix, ".csv"))
     
     Sys.sleep(0.25)
     showModal(modalDialog(
@@ -836,27 +849,27 @@ showModal(modalDialog(
 # (Thresholds) Seasonal plots ----
 renderUI({
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite))
-saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+
   rv$SeasonalPlots <- FuncPlotlyScatter(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
   Sys.sleep(1)
 })
 
 # (Thresholds) Recalculate thresholds ----
 observeEvent(eventExpr = input$button_RecalcThresholds, { 
+
   shiny::req(!is.null(input$sel_CalcUnit), !is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
   withProgress(message = "Just a moment...", detail = "...calculating thresholds", value = 0, {
     cat("line766")
     # Calculate threshold levels
     if(input$sel_ThresholdType == "quant") {
     shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
-    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), unit = input$sel_CalcUnit)
+    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
     }
     cat("line772")
 
     if(input$sel_ThresholdType == "numb") {
       shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
-      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), unit = input$sel_CalcUnit)
+      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
     }
     cat("line777")
     # Create heat plots
@@ -868,6 +881,8 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     pick_list$curveNumber <- 0:(nrow(pick_list)-1)
     rv$PickList <- pick_list
    cat("line786")
+     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
     rv$ThreshHeatPlots <- FuncPlotlyHeatPlot(dat = rv$ThreshDataSET)
     cat("line788")
     # Count threshold levels
@@ -1266,12 +1281,10 @@ shinyjs::hidden( # hide this well panel until !is.null(rv$SubDataSET)
     condition = "(input.sel_ThresholdType == 'numb')",
     numericInput("sel_ThresholdLower",
                  label = "Enter lower limit",
-                 value = -20,
-                 min = 0.0),
+                 value = -20),
     numericInput("sel_ThresholdUpper",
                  label = "Enter upper limit",
-                 value = 20,
-                 min = 0.0)
+                 value = 20)
     )
   })
   ))
@@ -1315,7 +1328,7 @@ renderPlot({
     get_legend(
       ggplot(rv$ThreshDataSET, aes(x = EventDate, y = PinPosition, fill = Level)) +
         geom_tile() + 
-        scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = ifelse(input$sel_CalcUnit == "ChangeMMPerYear", "Threshold Category (CHANGE PER YEAR):  ", "Threshold Category (CHANGE SINCE PRIOR):   ")) + 
+        scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = switch((input$sel_CalcUnit == "ChangeMMPerYear")+1, "Threshold Category (CHANGE SINCE PRIOR):   ", "Threshold Category (CHANGE PER YEAR):  ")) + 
         theme(legend.position = "top",
               legend.key.width = unit(1, "cm"),
               legend.text = element_text(size = 16, margin = margin(r = 2, unit = "cm")),
