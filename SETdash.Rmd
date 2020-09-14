@@ -14,7 +14,7 @@ runtime: shiny
 ### PICK UP FROM HERE
 # Records Export Page 
 # >> side panel allows user to choose which columns to view (and export). 
-# I think I should allow user to save the CheckNOTES data in .RDS for later processing.
+# I think I should allow user to save the QAQC_COMMENTS data in .RDS for later processing.
 
 
 ### NOTES
@@ -112,7 +112,7 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 ```
 
 ```{r startup}
-rv <- reactiveValues(DataSET = NULL, CheckStatus = NULL, CheckCols = NULL, DataStation = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, PickList = NULL, ThreshHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
+rv <- reactiveValues(DataSET = NULL, DataStation = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, PickList = NULL, ThreshHeatPlots = NULL, SeasonalPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "chartreuse", "lightpink", "honeydew2") # Colorblind-friendly palette that will be used throughout
 ```
@@ -173,10 +173,10 @@ FuncImportList <- function(filepaths_vec, is_SET = FALSE, colnames_start = "Park
     combined_file %<>% # convert all column names to upper camel style
       dplyr::arrange(Park, SiteName, StationName, PipeDirection, PinPosition, EventDate) %>%
       dplyr::mutate(
-        CheckNOTES = NA, # add a notes column for user to edit in dashboard
+        QAQC_COMMENTS = NA, # add a notes column for user to edit in dashboard
         RecordID = row_number()) %>% # add a unique ID to each record
-      dplyr::select(CheckNOTES, RecordID, everything()) # arrange column order
-    combined_file$CheckNOTES <- as.character(combined_file$CheckNOTES) # otherwise will assign it class of logical
+      dplyr::select(QAQC_COMMENTS, RecordID, everything()) # arrange column order
+    combined_file$QAQC_COMMENTS <- as.character(combined_file$QAQC_COMMENTS) # otherwise will assign it class of logical
   }
   return(combined_file)
 }
@@ -194,7 +194,8 @@ FuncBreakDates <- function(dat) {
     dplyr::mutate(
       EventDate = lubridate::as_date(EventDate, format = "%m/%d/%Y"),
       Yr = lubridate::year(EventDate), # for annual summaries
-      Mnth = factor(lubridate::month(EventDate), levels = 1:12)
+      Mnth = factor(lubridate::month(EventDate), levels = 1:12),
+      Week = factor(lubridate::week(EventDate), levels = 1:53)
     )
   # dat$Yr <- factor(dat$Yr, levels = min(dat$Yr, na.rm = TRUE):max(dat$Yr, na.rm = TRUE)) # make sure any missing years are still shown in plots
   return(dat)
@@ -256,8 +257,10 @@ FuncCalcChange <- function(dat) {
     dplyr::group_by(Park, ParkCode, SiteName, StationName, PipeDirection, PinPosition) %>%
     dplyr::arrange(EventDate) %>%
     dplyr::mutate(
-      DiffMMHeight = PinHeightMm1 - zoo::na.locf(dplyr::lag(PinHeightMm1, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
-      DiffDays = TempEventDate - zoo::na.locf(dplyr::lag(TempEventDate, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
+      # DiffMMHeight = PinHeightMm1 - zoo::na.locf(dplyr::lag(PinHeightMm1, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
+      # DiffDays = TempEventDate - zoo::na.locf(dplyr::lag(TempEventDate, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
+      DiffMMHeight = PinHeightMm1 - dplyr::lag(PinHeightMm1),
+      DiffDays = TempEventDate - dplyr::lag(TempEventDate),
       ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 2)
     ) %>%
     dplyr::select(-TempEventDate) %>%
@@ -282,11 +285,11 @@ FuncUpdateCheckCols = function(input_edit, output_table, proxyDT) {
   v = info$value
 
   ID_change <- rv$SubDataSETRaw$RecordID[i]
-  rv$DataSET[rv$DataSET$RecordID==ID_change, "CheckNOTES"] <<- DT::coerceValue(v, rv$DataSET[rv$DataSET$RecordID==ID_change, "CheckNOTES"]) # update in the raw
+  rv$DataSET[rv$DataSET$RecordID==ID_change, "QAQC_COMMENTS"] <<- DT::coerceValue(v, rv$DataSET[rv$DataSET$RecordID==ID_change, "QAQC_COMMENTS"]) # update in the raw
 
 }
 
-FuncCalcQuant <- function(dat) {
+FuncCalcQuant <- function(dat, unit) {
   # Function to classify ChangeMMPerYear by user-specified groups and quantiles
   #
   # Args:
@@ -296,14 +299,14 @@ FuncCalcQuant <- function(dat) {
   #   A data frame with an additional columns classifying ChangeMMPerYear relative to specified quantiles per group
   #
   dat <- droplevels(dat)
+  names(dat)[names(dat) == unit] <- "unit"
   dat %<>% dplyr::mutate(
     GroupingVar = switch(input$sel_QuantileGroup,
                          "site" = SiteName,
                          "station" = StationName)) 
   quant_list <- dat %>%
     dplyr::group_by(GroupingVar) %>%
-    group_map(~ quantile(.x$ChangeMMPerYear, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
-  
+  group_map(~ quantile(.x$unit, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
   quant_df <- data.frame(do.call("rbind", quant_list))
   names(quant_df) <- c("LowerCutoff", "UpperCutoff")
   quant_df$GroupingVar <- levels(dat$GroupingVar)
@@ -311,14 +314,15 @@ FuncCalcQuant <- function(dat) {
   dat2 <- dat %>%
     dplyr::left_join(quant_df, by = "GroupingVar") %>%
     dplyr::mutate(Level = ifelse(
-      ChangeMMPerYear < LowerCutoff, "below", ifelse(
-        ChangeMMPerYear > UpperCutoff, "above", "between(inclusive)"))) %>%
+      unit < LowerCutoff, "below", ifelse(
+        unit > UpperCutoff, "above", "between(inclusive)"))) %>%
     dplyr::select(-GroupingVar)
   dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
+  names(dat)[names(dat) == "unit"] <- unit
   return(dat2)
   }
 
-FuncCalcThresh <- function(dat) {
+FuncCalcThresh <- function(dat, unit) {
   # Function to classify ChangeMMPerYear by user-specified numeric thresholds
   #
   # Args:
@@ -328,17 +332,78 @@ FuncCalcThresh <- function(dat) {
   #   A data frame with an additional column classifying ChangeMMPerYear relative to specified thresholds
   #
   dat <- droplevels(dat)
+  names(dat)[names(dat) == unit] <- "unit"
   dat2 <- dat %>% 
     dplyr::mutate(
     LowerCutoff = input$sel_ThresholdLower,
     UpperCutoff = input$sel_ThresholdUpper,
     Level = ifelse(
-      ChangeMMPerYear < LowerCutoff, "below", ifelse(
-        ChangeMMPerYear > UpperCutoff, "above", "between(inclusive)")))
+      unit < LowerCutoff, "below", ifelse(
+        unit > UpperCutoff, "above", "between(inclusive)")))
   dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
+  names(dat2)[names(dat2) == "unit"] <- unit
   return(dat2)
 }
   
+FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess = TRUE, rotate_x = FALSE) {
+  # Function to generate scatterplot of data
+  #
+  # Args:
+  #   dat:  A data frame with the raw data
+  #   x_nam: Column name for x-axis variable
+  #   trans_y: Transformation to apply to y axis
+  #   add_loess:  Add loess smooth? (will be biased by censored data)
+  #   rotate_x: should x-axis labels be rotated?
+  #
+  # Returns:
+  #   List of scatterplot
+  # 
+  
+  shiny::req(sum(!is.na(dat$PinHeightMm1)) > 0) # make sure there are data
+  
+  if(x_nam == "EventDate") {
+    xaxes_min = min(dat$EventDate, na.rm = TRUE)
+    xaxes_max = max(dat$EventDate, na.rm = TRUE)
+  }
+  
+  yaxes_min = min(dat$PinHeightMm1, na.rm = TRUE)
+  yaxes_max = max(dat$PinHeightMm1, na.rm = TRUE)
+  
+  # Create the plot(s)
+    
+    p_points <- ggplot(data = dat, aes(x = Week, y = PinHeightMm1, text = paste0("Site: ", SiteName, "<br>Station: ", StationName, "<br>Survey date: ", EventDate, "<br>X-value: ", Week, "<br>Y-value: ", PinHeightMm1))) +
+      geom_jitter(aes(fill = Yr, color = Yr), size = 2, alpha = 0.5, show.legend = c(fill = TRUE, color = FALSE, shape = FALSE))
+  
+    # Create a pretty x-axis
+    if(x_nam == "EventDate") {
+      p1_points <- p_points + scale_x_date(date_breaks = "1 year", date_labels = "%Y", limits = c(xaxes_min, xaxes_max))
+    } else {
+      p1_points <- p_points + scale_x_discrete(breaks = levels(dat$Week), drop = FALSE)
+    }
+    
+    # If adding loess smooth...
+    # if(add_loess) {
+      p1_points <- p1_points + geom_smooth(data = dat, aes(x = Week, y = PinHeightMm1), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
+      # }
+    
+    # Final formatting of plots
+    p1_points <- p1_points +
+      scale_y_continuous(trans = trans_y, labels = function(x) as.character(round(x,2)), breaks = pretty_breaks(), limits = c(yaxes_min, yaxes_max)) + # alternatively, can use 'coord_cartesian(ylim = c(axes_min, axes_max))' to zoom in to the limits rather than "cutting off" the limits, as setting limits within scale_y_continuous() would do 
+      theme_bw(base_size = 11) +
+      {if(rotate_x) {theme(axis.text.x = element_text(angle = 60, hjust = 1))}} +
+      theme(axis.title.x = element_blank(),
+            axis.title.y = element_blank(),
+            legend.position = "top",
+            legend.text = element_text(size = 16),
+            legend.title = element_text(size = 16)) +
+      facet_wrap(. ~ StationName, drop = TRUE, ncol = 1) # add the name as facet label
+    out_plotly <- ggplotly(
+      p1_points,
+      height = 400*length(unique(dat$StationName))) # THIS IS NOT WORKING--CAN'T SCROLL DOWN
+    
+  return(out_plotly)
+}
+
 FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ffa500"), discrete_levels = c("below", "between(inclusive)", "above")) {
   # Function to create plotly heatmaps of ChangeMMPerYear, organized station. Using plot_ly because ggplotly is too slow for interactive heat plots b/c it doesn't recognize the input as a heatmap and creates a scatterplot where each rectangle is drawn separately with all the necessary attributes. 
   #
@@ -425,7 +490,7 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
         text = txt, # add the values in the cells 
         showarrow = FALSE) %>%
       add_annotations( # Pipe Direction subtitle
-        text = paste0("Pipe ", unique(template$PipeDirection)),
+        text = paste0("Pipe Direction ", unique(template$PipeDirection)),
         xref = "paper",
         yref = "paper",
         x = 0.5,
@@ -604,7 +669,7 @@ observeEvent(eventExpr = input$button_ImportSQL, {
 )
 
 
-# (Home) Import and format data ----
+# (Home) Import and format data from CSV ----
 observeEvent(eventExpr = input$button_ImportCSV, {
   # Look for files of SET data
   SET_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*SET Data*")) 
@@ -645,24 +710,84 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_SET2))
     rv$DataStation <- as.data.frame(FuncImportList(filepaths_vec = station_files_vec))
     
-    # shiny::req(!is.null(rv$DataSET))
-    # 
-    # incProgress(2/3, detail = "...getting park unit boundaries from IRMA")
-    # FuncParkBoundaries(park_vec = sort(unique(rv$DataSET$ParkCode)))
+    shiny::req(!is.null(rv$DataSET))
+
+    incProgress(2/3, detail = "...saving formatted data")
+    showModal( # Pop-up modal asking user to enter prefix to append to saved files
+      modalDialog(
+        textInput("out_prefix", "Prefix to append to output files: ",
+                  placeholder = paste0("SET_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date()))),
+                value = paste0("SET_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())))
+      ),
+      footer = tagList(
+        actionButton("button_goSave", "SAVE")
+      )
+    ))
+  
+  observeEvent(input$button_goSave, {
+    cat("line725")
+    saveRDS(isolate(reactiveValuesToList(rv)), paste0("Data_out/", input$out_prefix, ".RDS"))
+    cat("line725")
+    write_csv(rv$DataSET, paste0("Data_out/", input$out_prefix, ".csv"))
     
     Sys.sleep(0.25)
+    showModal(modalDialog(
+      title = "Done",
+      HTML("The data for dashboard use have been saved as '", input$out_prefix, ".RDS' in the folder 'Data_out' of the current working directory, ", getwd(), ".The corresponding .csv file has been saved in the same location. <br><br>You may now navigate to the EXAMINE DATA tab to run Data Check reports.") 
+    ))
+  })
+        
+    })
+}, ignoreInit = TRUE)
+
+# (Home) Load data as RDS ----
+observeEvent(eventExpr = input$button_LoadRDS, {
+  showModal(modalDialog(
+    fileInput("saved_data_file", label = "Import a SET file already formatted for dashboard use ('RDS' extension)", placeholder = "Click 'Browse...' button then navigate to file", accept = c('.RDS'), width = "100%"),
+    footer = tagList(
+      modalButton("Cancel")
+    )
+  ))
+})
+
+observeEvent(eventExpr = input$saved_data_file, {
+  tryCatch(out <- readRDS(input$saved_data_file$datapath),
+           error = function(e) print("Cannot import the selected file"))
+  if(class(out)!="list") {
+    showModal(modalDialog(
+    title = "Error",
+    "Cannot import the selected file. Please try a different .RDS file."
+    ))
+    rm(out)
+    }
+  
+  shiny::req(!is.null(out))
+
+  for(i in c("DataSET", "DataStation")) {
+    if(!is.null(out[i])) {
+    rv[[i]] <- out[[i]] # load the data in the dashboard
+    }
+  }
+  if(!is.null(rv$DataSET)) {
+    rv$DataSET %<>% 
+      dplyr::mutate(
+        EventDate = lubridate::as_date(EventDate, format = "%m/%d/%Y"),
+        Yr = lubridate::year(EventDate), # for annual summaries
+        Mnth = factor(lubridate::month(EventDate), levels = 1:12),
+        Week = factor(lubridate::week(EventDate), levels = 1:53)
+      )
+  }
+
+  Sys.sleep(0.25)
   showModal(modalDialog(
   title = "Done",
   "You may now navigate to the EXAMINE DATA tab to run Data Check reports."
   ))
-
-  })
 })
-
 
 # (Examine) Run data check (dataMaid report) ----
 observeEvent(eventExpr = input$button_RunDataCheck, {
-
+  shiny::req(!is.null(rv))
   unlink(list.files(path = here::here(), pattern = "^dataMaid")) 
   rv$ShowDM <- FALSE
   
@@ -680,7 +805,7 @@ observeEvent(eventExpr = input$button_RunDataCheck, {
 withProgress(message = "Generating data check report...", value = 0, { # show progress bar
     
     check_sub <- rv$SubDataSET %>%
-      dplyr::select(-CheckNOTES, -RecordID, -SetDirectionNotes, -DiffMMHeight, -DiffDays, -ChangeMMPerYear) %>%
+      dplyr::select(-QAQC_COMMENTS, -RecordID, -SetDirectionNotes, -DiffMMHeight, -DiffDays, -ChangeMMPerYear) %>%
       dplyr::mutate(StationName = as.character(StationName),
                     EventDate = as.character(EventDate)) %>%
       dplyr::filter(StationName == rv$SubDataSummary[input$out_TableSummary_rows_selected, "StationName"])
@@ -708,22 +833,32 @@ showModal(modalDialog(
   ))
 })
 
-# (Thresholds) # Recalculate thresholds ----
+# (Thresholds) Seasonal plots ----
+renderUI({
+  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite))
+saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+  rv$SeasonalPlots <- FuncPlotlyScatter(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
+  Sys.sleep(1)
+})
+
+# (Thresholds) Recalculate thresholds ----
 observeEvent(eventExpr = input$button_RecalcThresholds, { 
-  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
+  shiny::req(!is.null(input$sel_CalcUnit), !is.null(rv$SubDataSET), !is.null(input$sel_HeatSite), !is.null(input$sel_ThresholdType))
   withProgress(message = "Just a moment...", detail = "...calculating thresholds", value = 0, {
-    
+    cat("line766")
     # Calculate threshold levels
     if(input$sel_ThresholdType == "quant") {
-    shiny::req(!is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
-    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
+    shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
+    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), unit = input$sel_CalcUnit)
     }
-    
+    cat("line772")
+
     if(input$sel_ThresholdType == "numb") {
-      shiny::req(!is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
-      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
+      shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
+      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), unit = input$sel_CalcUnit)
     }
-    
+    cat("line777")
     # Create heat plots
     shiny::req(!is.null(rv$ThreshDataSET))
     pick_list <- rv$ThreshDataSET %>% # pick-list for user clicks on heat plot
@@ -732,16 +867,16 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
       distinct()
     pick_list$curveNumber <- 0:(nrow(pick_list)-1)
     rv$PickList <- pick_list
-   
+   cat("line786")
     rv$ThreshHeatPlots <- FuncPlotlyHeatPlot(dat = rv$ThreshDataSET)
-    
+    cat("line788")
     # Count threshold levels
     rv$ThreshCounts <- rv$ThreshDataSET %>%
     dplyr::select(RecordID, ParkCode, SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level) %>%
     dplyr::group_by(ParkCode, SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level, .drop = FALSE) %>%
     dplyr::summarise(N = n()) %>%
     dplyr::mutate(HoverLabel = paste0("Park: ", ParkCode, "<br>Station: ", StationName, "<br>Date: ", EventDate, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>LEVEL: ", Level, "<br>COUNT: ", N))
-    
+    cat("line795")
     # Create map
     shiny::req(!is.null(rv$ThreshCounts), !is.null(rv$DataStation))
     rv$MapDat <- rv$ThreshCounts %>%
@@ -751,7 +886,7 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
       spread(key = Level, value = N, drop = FALSE, fill = 0) %>%
       left_join(unique(rv$DataStation[c("Park", "ParkCode", "SiteName", "StationName", "Latitude", "Longitude")]), by = c("SiteName", "StationName"))
     })
-  
+  cat("line805")
   Sys.sleep(2)
 })
 ```
@@ -803,22 +938,47 @@ renderUI({
   Sys.sleep(0.25) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
   })
 
-# Update CheckNOTES column ----
+# Update QAQC_COMMENTS column ----
 observeEvent(input$out_TableRaw_cell_edit, {
   FuncUpdateCheckCols(input_edit = input$out_TableRaw_cell_edit, output_table = rv$SubDataSETRaw, proxyDT = raw_proxyDT)
   })
 
+# Export data records with QAQC_COMMENTS ----
+output$button_exportQAQC_COMMENTS <- downloadHandler(
+    filename = function() {
+      return(paste0("SET_commented_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())),".csv"))
+      },
+    content = function(file) {
+      write_csv(rv$SubDataSETRaw %>% dplyr::filter(!is.na(QAQC_COMMENTS)), file)
+    }
+    )
+
 # Table of selected station ----
 renderUI({
-  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary), !is.null(input$out_TableSummary_rows_selected))
+  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary))
+  if(!is.null(input$out_TableSummary_rows_selected)) {
 
   rv$SubDataSETRaw <- rv$SubDataSET %>%
     dplyr::mutate(StationName = as.character(StationName)) %>%
     dplyr::filter(StationName ==  rv$SubDataSummary[input$out_TableSummary_rows_selected, "StationName"]) %>% # user-selected station
-    dplyr::select(-Yr, -Mnth, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
+    dplyr::select(-Yr, -Mnth, -Week, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
+  }
+  Sys.sleep(0.25) # Need to give it time to update, or will generate warning on dashboard
 })
 ```
- 
+
+```{r page_threshold_plots}
+
+# Show/hide well panels ----
+renderUI({
+  if(!is.null(rv$SubDataSET)) {
+    shinyjs::showElement("wp_Thresholds")
+    } else {
+      shinyjs::hideElement("wp_Thresholds")
+    }
+})
+```
+
 ```{r page_export_NERRs}
 renderUI({
   if(!is.null(rv$DataSET)) {
@@ -831,8 +991,7 @@ renderUI({
 renderUI({
   shiny::req(!is.null(input$sel_ExportParks), !is.null(rv$DataSET))
   rv$DataSET_NERRs <- FuncFormatSET_NERRs(dat = rv$DataSET)
-saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+  Sys.sleep(0.25) # Need to give it time to update, or will generate warning on dashboard
 })
 
 output$button_exportNERRs <- downloadHandler(
@@ -842,11 +1001,6 @@ output$button_exportNERRs <- downloadHandler(
     content = function(file) {
       write_csv(rv$DataSET_NERRs, file)
     }
-    
-    showModal(modalDialog(
-      title = "Done",
-      "The data for NERRs Shiny use have been saved in the selected location."
-    ))
     )
 ```
     
@@ -886,12 +1040,13 @@ This dashboard is a resource for lorem ipsum dolor sit amet, consectetur adipisc
 <font size="4">3.  Navigate to the other dashboard pages to view summary tables, graphs, and maps of the data.</font>
 
 ```{r}
-actionButton("button_ImportCSV", "Import Data from CSV Files", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px;") # width:350px;
-```
+actionButton("button_LoadRDS", "Load an Existing RDS File",
+             style="color:black; background-color: lightgreen; border:2px; margin:5px; width:230px; display:inline-block;")
 
+actionButton("button_ImportCSV", "Import from CSV Files",
+             style="color:black; background-color: lightgreen; border:2px; margin:5px; width:200px; display:inline-block;")
 
-```{r}
-actionButton("button_ImportSQL", "Import Data from the SQL Database", width = "100%", style="color:black; background-color: lightgreen; display:inline-block; border:2px; margin:5px;") # width:350px;
+actionButton("button_ImportSQL", "Import from SQL", style="color:black; background-color: lightgreen; border:2px; margin:5px; width:200px; display:inline-block;")
 ```
 
 Column {data-width=10}
@@ -918,6 +1073,12 @@ shinyjs::hidden( # hide this well panel until !is.null(rv$DataSET)
       }),
     
     em("Select a record to run a data check report and view the raw data"),
+    
+    br(), 
+    
+    br(),
+    
+    downloadLink("button_exportQAQC_COMMENTS", label = "Export COMMENTED data records"),
     
     br(),
     
@@ -977,7 +1138,7 @@ Examine Data - Outputs {data-width=100 .tabset .tabset-fade}
 output$out_TableSummary <- DT::renderDT({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
   
-  temp_table_summary <- DT::datatable(
+  DT::datatable(
     rv$SubDataSummary,
     filter = "top",
     rownames = FALSE,
@@ -985,7 +1146,6 @@ output$out_TableSummary <- DT::renderDT({
     options = list(
       columnDefs = list(list(className = "dt-center", targets = "_all"))))
 })
-
 
 DTOutput("out_TableSummary")
 tags$style("#out_TableSummary{height:100vh;overflow-x:scroll;overflow-y:scroll}")
@@ -1025,7 +1185,7 @@ output$out_TableRaw = DT::renderDT({
       )
   )
   
-  temp_raw %>% formatStyle("CheckNOTES", backgroundColor = "yellow")
+  temp_raw %>% formatStyle("QAQC_COMMENTS", backgroundColor = "yellow")
 })
 
 raw_proxyDT <- DT::dataTableProxy("out_TableRaw")
@@ -1051,16 +1211,30 @@ renderUI({
         )
       })
 
-renderUI({
-  shiny::req(!is.null(rv$SubDataSET))
-  radioButtons("sel_ThresholdType",
-               label = "Identify annual change thresholds as:",
-               choiceNames = list("Numbers", "Quantiles"),
-               choiceValues = list("numb", "quant"),
-               selected = "numb")
-})
-
-renderUI({
+shinyjs::hidden( # hide this well panel until !is.null(rv$SubDataSET)
+  wellPanel(
+    id = "wp_Thresholds",
+    
+    renderUI({
+      shiny::req(!is.null(rv$SubDataSET))
+      radioButtons("sel_CalcUnit",
+                   label = "Measurement unit:",
+                   choiceNames = list("Change(mm) per year", "Change(mm) from prior"),
+                   choiceValues = list("ChangeMMPerYear", "DiffMMHeight"),
+                   selected = "ChangeMMPerYear")
+      }),
+      
+    
+    renderUI({
+      shiny::req(!is.null(rv$SubDataSET))
+      radioButtons("sel_ThresholdType",
+                   label = "Set thresholds as:",
+                   choiceNames = list("Numbers", "Quantiles"),
+                   choiceValues = list("numb", "quant"),
+                   selected = "numb")
+      }),
+    
+    renderUI({
   shiny::req(!is.null(input$sel_ThresholdType))
   conditionalPanel(
     condition = "(input.sel_ThresholdType == 'quant')",
@@ -1082,10 +1256,11 @@ renderUI({
                choiceNames = list("by site", "by station"),
                choiceValues = list("site", "station"),
                selected = "site")
-  )
-})
-
-renderUI({
+    )
+  }),
+  
+  
+  renderUI({
   shiny::req(!is.null(input$sel_ThresholdType))
   conditionalPanel(
     condition = "(input.sel_ThresholdType == 'numb')",
@@ -1097,8 +1272,9 @@ renderUI({
                  label = "Enter upper limit",
                  value = 20,
                  min = 0.0)
-  )
-})
+    )
+  })
+  ))
 
 br()
 
@@ -1129,7 +1305,7 @@ Threshold Plots - Output {.tabset .tabset-fade}
 ```{r heat}
 # Addressed the unequal widths issue but putting legend in same R chunk as the graph
 renderPlot({
-  shiny::req(!is.null(rv$ThreshDataSET), !is.null(rv$ThreshHeatPlots))
+  shiny::req(!is.null(rv$ThreshDataSET), !is.null(rv$ThreshHeatPlots), !is.null(input$sel_CalcUnit))
   
   discrete_cols <- c("#ffd700", "#add8e6", "#ffa500")
   names(discrete_cols) <- c("below", "between(inclusive)", "above")
@@ -1139,7 +1315,7 @@ renderPlot({
     get_legend(
       ggplot(rv$ThreshDataSET, aes(x = EventDate, y = PinPosition, fill = Level)) +
         geom_tile() + 
-        scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = "Threshold Category:   ") + 
+        scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = ifelse(input$sel_CalcUnit == "ChangeMMPerYear", "Threshold Category (CHANGE PER YEAR):  ", "Threshold Category (CHANGE SINCE PRIOR):   ")) + 
         theme(legend.position = "top",
               legend.key.width = unit(1, "cm"),
               legend.text = element_text(size = 16, margin = margin(r = 2, unit = "cm")),
@@ -1212,6 +1388,17 @@ output$out_ThreshMap <- renderLeaflet({
 
 tags$style("#out_ThreshMap {height: calc(100vh - 100px) !important;}")
 leafletOutput('out_ThreshMap', height="100%", width = "100%")
+```
+
+### Seasonal Patterns
+####
+```{r seasonal}
+# Addressed the unequal widths issue but putting legend in same R chunk as the graph
+ 
+renderPlotly({
+  FuncOrderCheck(import = TRUE, examine = TRUE, plot = TRUE)
+  rv$SeasonalPlots
+  })
 ```
 
 Export Data for NERRs
