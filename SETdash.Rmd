@@ -11,6 +11,11 @@ runtime: shiny
 # saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
 # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
+### FIX
+# Heat plot legend should not update until recalculate thresholds button is pressed
+# Speed up action when recalculate thresholds
+# Quantile doesn't work for heat plot
+
 ### PICK UP FROM HERE
 # Records Export Page 
 # >> side panel allows user to choose which columns to view (and export). 
@@ -313,11 +318,11 @@ FuncCalcQuant <- function(dat, sel_unit) {
   quant_df$GroupingVar <- levels(dat$GroupingVar)
   
   dat2 <- dat %>%
-    dplyr::left_join(quant_df, by = "GroupingVar") %>%
-    dplyr::mutate(Level = ifelse(
-      Unit < LowerCutoff, "below", ifelse(
-      Unit > UpperCutoff, "above", "between(inclusive)"))) %>%
-    dplyr::select(-GroupingVar)
+    dplyr::left_join(quant_df, by = "GroupingVar")
+  dat2$Level <- ifelse(
+      dat2$Unit < dat2$LowerCutoff, "below", ifelse(
+      dat2$Unit > dat2$UpperCutoff, "above", "between(inclusive)"))
+  dat2$GroupingVar <- NULL
   dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
   names(dat)[names(dat) == "Unit"] <- sel_unit
   return(dat2)
@@ -335,13 +340,13 @@ FuncCalcThresh <- function(dat, sel_unit) {
   #
   dat <- droplevels(dat)
   names(dat)[names(dat) == sel_unit] <- "Unit"
-  dat2 <- dat %>% 
-    dplyr::mutate(
-    LowerCutoff = input$sel_ThresholdLower,
-    UpperCutoff = input$sel_ThresholdUpper,
-    Level = ifelse(
-      Unit < LowerCutoff, "below", ifelse(
-      Unit > UpperCutoff, "above", "between(inclusive)")))
+  dat2 <- dat
+  dat2$LowerCutoff <- input$sel_ThresholdLower
+  dat2$UpperCutoff <- input$sel_ThresholdUpper
+  dat2$Level <- ifelse(
+      dat2$Unit < dat2$LowerCutoff, "below", ifelse(
+      dat2$Unit > dat2$UpperCutoff, "above", "between(inclusive)"))
+  
   dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
   names(dat2)[names(dat2) == "Unit"] <- sel_unit
   return(dat2)
@@ -421,7 +426,7 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
     ungroup() %>%
     dplyr::select(RecordID, SiteName, StationName, PipeDirection, PinPosition, EventDate, PinHeightMm1, SetDirectionNotes, PinFlag, DiffMMHeight, DiffDays, ChangeMMPerYear, LowerCutoff, UpperCutoff, Level) %>%
     dplyr::arrange(RecordID) %>%
-    dplyr::mutate(HoverLabel = paste0("Record ID: ", RecordID, "<br>Date: ", EventDate, "<br>Pin Flag: ", PinFlag, "<br>Set Direction Notes: ", SetDirectionNotes, "<br>Pin Position: ", PinPosition, "<br>Pin Height (mm): ", PinHeightMm1, "<br>Height Diff (mm): ", DiffMMHeight, "<br>Days Diff: ", DiffDays, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>CHANGE PER YR (mm): ", ChangeMMPerYear, "<br>LEVEL: ", Level)) %>%
+    dplyr::mutate(HoverLabel = paste0("Record ID: ", RecordID, "<br>Date: ", EventDate, "<br>Pin Flag: ", PinFlag, "<br>Set Direction Notes: ", SetDirectionNotes, "<br>Pin Position: ", PinPosition, "<br>Pin Height (mm): ", PinHeightMm1, "<br>Height Diff (mm): ", DiffMMHeight, "<br>Days Diff: ", DiffDays, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>Change Per Yr (mm): ", ChangeMMPerYear, "<br>LEVEL: ", Level)) %>%
     droplevels()
   
   # Calculate total and relative heights
@@ -874,15 +879,14 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     cat("line777")
     # Create heat plots
     shiny::req(!is.null(rv$ThreshDataSET))
-    pick_list <- rv$ThreshDataSET %>% # pick-list for user clicks on heat plot
-      dplyr::select(StationName, PipeDirection) %>%
-      dplyr::arrange(StationName, PipeDirection) %>%
-      distinct()
-    pick_list$curveNumber <- 0:(nrow(pick_list)-1)
-    rv$PickList <- pick_list
+    # pick_list <- rv$ThreshDataSET %>% # pick-list for user clicks on heat plot
+    #   dplyr::select(StationName, PipeDirection) %>%
+    #   dplyr::arrange(StationName, PipeDirection) %>%
+    #   distinct()
+    # pick_list$curveNumber <- 0:(nrow(pick_list)-1)
+    # rv$PickList <- pick_list
    cat("line786")
-     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+
     rv$ThreshHeatPlots <- FuncPlotlyHeatPlot(dat = rv$ThreshDataSET)
     cat("line788")
     # Count threshold levels
@@ -902,7 +906,8 @@ saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
       left_join(unique(rv$DataStation[c("Park", "ParkCode", "SiteName", "StationName", "Latitude", "Longitude")]), by = c("SiteName", "StationName"))
     })
   cat("line805")
-  Sys.sleep(2)
+
+  # Sys.sleep(2)
 })
 ```
 
@@ -1044,7 +1049,7 @@ Column {data-width=60}
 #### <font size="5"> Monitoring Wetland Elevation Dynamics in National Park Units</font> 
 
 <font size="4"> 
-This dashboard is a resource for lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</font>
+This dashboard is an interactive tool for QAQC and visualizing wetland elevation data collected in national park units. Wetland elevation is monitored using the Surface Elevation Table (SET) and marker horizons. Summary tables and graphs can be exported as .csv and .png files, respectively.</font>
 
 #### <font size="4">**Quick-Start Instructions**</font>
 
@@ -1340,11 +1345,8 @@ renderPlot({
   }, height = 60)
  
 renderPlotly({ # separate validation statements so they are checked in sequence
-  
-  withProgress(message = "SO CLOSE!!", detail = "...drawing interactive plots", value = 0, {
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = TRUE)
   rv$ThreshHeatPlots
-  })
 })
 ```
 
@@ -1404,14 +1406,16 @@ leafletOutput('out_ThreshMap', height="100%", width = "100%")
 ```
 
 ### Seasonal Patterns
-####
+
 ```{r seasonal}
-# Addressed the unequal widths issue but putting legend in same R chunk as the graph
- 
-renderPlotly({
+output$out_SeasonalPlots <- renderPlotly({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = TRUE)
+  shiny::req(!is.null(rv$SeasonalPlots))
   rv$SeasonalPlots
   })
+
+tags$style("#out_SeasonalPlots{height:100vh;overflow-y:scroll}") # Y-axis scrollbar if overflows
+plotlyOutput('out_SeasonalPlots', height="100%", width = "100%")
 ```
 
 Export Data for NERRs
