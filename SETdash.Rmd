@@ -475,7 +475,7 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
       showscale = FALSE) %>%
       plotly::add_heatmap(
         x = ~as.factor(EventDate),
-        y = ~PinPosition,
+        y = ~as.integer(PinPosition),
         text = ~HoverLabel, # hover information
         hoverinfo ="text",
         z = ~as.numeric(factor(template$Level, ordered = T, levels = discrete_levels)), # assign discrete colors to the cells
@@ -490,12 +490,13 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
           tickangle = 270,
           titlefont=list(size=16, family = "Arial")),
         yaxis = list( # y-axis
-          autorange = "reversed")
+          autorange = "reversed",
+          dtick = 1)
         ) %>%
       add_annotations( 
         x = template$EventDate,
-        y = template$PinPosition,
-        align = "center", 
+        y = as.integer(template$PinPosition),
+        align = "center",
         text = txt, # add the values in the cells 
         showarrow = FALSE) %>%
       add_annotations( # Pipe Direction subtitle
@@ -886,7 +887,8 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     # pick_list$curveNumber <- 0:(nrow(pick_list)-1)
     # rv$PickList <- pick_list
    cat("line786")
-
+saveRDS(isolate(reactiveValuesToList(rv)), "OUT_RV.RDS")
+saveRDS(isolate(reactiveValuesToList(input)), "OUT_input.RDS")
     rv$ThreshHeatPlots <- FuncPlotlyHeatPlot(dat = rv$ThreshDataSET)
     cat("line788")
     # Count threshold levels
