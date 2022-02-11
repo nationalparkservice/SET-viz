@@ -441,13 +441,13 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
  heat_station_list <- lapply(sort(unique(dat2$StationName)), function(i) {
     
     # Data for this station
-    subdat <- subset(dat2, StationName == i) %>%
+    subdat <- dplyr::filter(dat2, StationName == i) %>%
       droplevels()
     
     # Pipe directions for this station
     pipe_dxn_list <- vector("list", length = length(unique(subdat$PipeDirection)))
     pipe_dxn_list <- lapply(sort(unique(subdat$PipeDirection)), function(j) { # subplot the pipe directions for a station
-      subdat_pipe <- subset(subdat, PipeDirection == j)
+      subdat_pipe <- dplyr::filter(subdat, PipeDirection == j)
   
     # create number matrix to put values in the heatmap cells
     template <- subdat_pipe %>%
@@ -585,7 +585,7 @@ FuncPlotlyPieMatrix <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#f
       survey_date <- sort(unique(dat$EventDate))[d]
       fig <- fig %>% 
         
-        add_pie(data = subset(dat, StationName == station & EventDate == survey_date),
+        add_pie(data = dplyr::filter(dat, StationName == station & EventDate == survey_date),
                 labels = ~Level, 
                 values = ~N,
                 textposition = 'inside',
@@ -856,7 +856,7 @@ showModal(modalDialog(
 renderUI({
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite))
 
-  rv$SeasonalPlots <- FuncPlotlyScatter(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite))
+  rv$SeasonalPlots <- FuncPlotlyScatter(dat = dplyr::filter(rv$SubDataSET, SiteName == input$sel_HeatSite))
   Sys.sleep(1)
 })
 
@@ -869,13 +869,13 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     # Calculate threshold levels
     if(input$sel_ThresholdType == "quant") {
     shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
-    rv$ThreshDataSET <- FuncCalcQuant(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
+    rv$ThreshDataSET <- FuncCalcQuant(dat = dplyr::filter(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
     }
     cat("line772")
 
     if(input$sel_ThresholdType == "numb") {
       shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
-      rv$ThreshDataSET <- FuncCalcThresh(dat = subset(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
+      rv$ThreshDataSET <- FuncCalcThresh(dat = dplyr::filter(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
     }
     cat("line777")
     # Create heat plots
@@ -886,9 +886,7 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     #   distinct()
     # pick_list$curveNumber <- 0:(nrow(pick_list)-1)
     # rv$PickList <- pick_list
-   cat("line786")
-saveRDS(isolate(reactiveValuesToList(rv)), "OUT_RV.RDS")
-saveRDS(isolate(reactiveValuesToList(input)), "OUT_input.RDS")
+
     rv$ThreshHeatPlots <- FuncPlotlyHeatPlot(dat = rv$ThreshDataSET)
     cat("line788")
     # Count threshold levels
@@ -908,7 +906,7 @@ saveRDS(isolate(reactiveValuesToList(input)), "OUT_input.RDS")
       left_join(unique(rv$DataStation[c("Park", "ParkCode", "SiteName", "StationName", "Latitude", "Longitude")]), by = c("SiteName", "StationName"))
     })
   cat("line805")
-
+saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
   # Sys.sleep(2)
 })
 ```
