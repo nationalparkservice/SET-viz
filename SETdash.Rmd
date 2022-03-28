@@ -15,6 +15,9 @@ runtime: shiny
 # Heat plot legend should not update until recalculate thresholds button is pressed
 # Speed up action when recalculate thresholds
 # Quantile doesn't work for heat plot
+# Change per year--really it depends on season, so instead of this show some indication of season and then have a warning sign that the time btwn events is not necessarily approx annual
+# Seasonal patterns--check what y-axis is, I think it's not change-per-yr right?
+# Can i get x-axis label on each heat plot matrix?
 
 ### PICK UP FROM HERE
 # Records Export Page 
