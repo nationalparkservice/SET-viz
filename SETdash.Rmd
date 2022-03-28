@@ -15,7 +15,7 @@ runtime: shiny
 # Heat plot legend should not update until recalculate thresholds button is pressed
 # Speed up action when recalculate thresholds
 # Quantile doesn't work for heat plot
-# Change per year--really it depends on season, so instead of this show some indication of season and then have a warning sign that the time btwn events is not necessarily approx annual
+# Change per year--really it depends on season, so instead of this show some indication of season and then have a warning sign that the time btwn events is not necessarily approx annual and that hover text will show # of days since last reading and that season of survey may influence pin height. Instead of change per year, the hover text should include # of days since last reading 
 # Seasonal patterns--check what y-axis is, I think it's not change-per-yr right?
 # Can i get x-axis label on each heat plot matrix?
 
@@ -29,7 +29,9 @@ runtime: shiny
 # Converted all tibbles to data frames to get rid of phantom column name errors
 
 ### QUESTIONS
-# Removing records with NA in any of these columns (StationName, EventDate, PipeDirection, PinPosition, PinHeightMm1)--any reason to keep those in? Can provide an output of which records were excluded, or just a summary of counts
+# pin_positionB --is that column name correct?
+# check if I identified the correct cols to be factor, integer, date formats
+# Removing records with NA in any of these columns (station_name, visit_date, SET_direction_azimuth, pin_positionB, pin_height_mm)--any reason to keep those in? Can provide an output of which records were excluded, or just a summary of counts
 # When calculating diff, only use 'Standard observation'?
 # How to deal with some pins having base pin height and others not?
 # On heat map page, do you want to be able to select a park or use previously selected park and filters?
@@ -156,54 +158,20 @@ FuncAllNoneButtons <- function(cond, name_all, name_none) {
   )
 }
 
-FuncImportList <- function(filepaths_vec, is_SET = FALSE, colnames_start = "Park,Park_Code,Site_Name") {
-  # Function to read in .csv files, find out where the header row begins, and only import starting from the header row, then rbind to produce a combined data frame
-  #
-  # Args:
-  #   filepaths_vec: Vector of file paths for importing
-  #   is_SET: TRUE or FALSE, is this for SET data (as opposed to Station)?
-  #   colnames_start: String of the first few column names, separated by commas and no space)
-  #
-  # Returns:
-  #   A combined data frame
-  #
-  import_list <- vector("list", length = length(filepaths_vec))
-  for(i in 1:length(filepaths_vec)) {
-    lines_read <- readLines(filepaths_vec[i], warn=F)
-    header_begins <- grep(colnames_start, lines_read) # find line where header begins
-    import_list[i] <- list(readr::read_csv(filepaths_vec[i], skip=header_begins-1))   # read in .csv, starting at header row
-  }
-  combined_file <- plyr::rbind.fill(import_list) %>% # combine the data frames
-    dplyr::distinct(.keep_all = TRUE) %>% # if there are any exactly duplicated records, only keep one
-    janitor::clean_names(case = "upper_camel") 
-  
-  if(is_SET) {
-    combined_file %<>% # convert all column names to upper camel style
-      dplyr::arrange(Park, SiteName, StationName, PipeDirection, PinPosition, EventDate) %>%
-      dplyr::mutate(
-        QAQC_COMMENTS = NA, # add a notes column for user to edit in dashboard
-        RecordID = row_number()) %>% # add a unique ID to each record
-      dplyr::select(QAQC_COMMENTS, RecordID, everything()) # arrange column order
-    combined_file$QAQC_COMMENTS <- as.character(combined_file$QAQC_COMMENTS) # otherwise will assign it class of logical
-  }
-  return(combined_file)
-}
-
 FuncBreakDates <- function(dat) {
   # Function to break dates into date categories
   #
   # Args:
-  #   dat:  A SET data frame with the raw data. One column needs to be EventDate, with format mm/dd/yyyy
+  #   dat:  A SET data frame with the raw data. One column needs to be visit_date, with format mm/dd/yyyy
   #
   # Returns:
   #   A data frame with additional columns classifying survey date by week, month, year
   #
   dat %<>% 
     dplyr::mutate(
-      EventDate = lubridate::as_date(EventDate, format = "%m/%d/%Y"),
-      Yr = lubridate::year(EventDate), # for annual summaries
-      Mnth = factor(lubridate::month(EventDate), levels = 1:12),
-      Week = factor(lubridate::week(EventDate), levels = 1:53)
+      visit_yr = lubridate::year(visit_date), # for annual summaries
+      visit_month = factor(lubridate::month(visit_date), levels = 1:12),
+      visit_week = factor(lubridate::week(visit_date), levels = 1:53)
     )
   # dat$Yr <- factor(dat$Yr, levels = min(dat$Yr, na.rm = TRUE):max(dat$Yr, na.rm = TRUE)) # make sure any missing years are still shown in plots
   return(dat)
@@ -226,7 +194,7 @@ FuncParkBoundaries <- function(park_vec) {
 
      if(httr::http_status(GET(unitBoundaryURL))$category!="Success") { # if not a valid service call or if the web service is down, abort
        showModal(
-         urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Error retrieving Park unit boundary data from IRMA. The message from the web service is: `", http_status(GET(unitBoundaryURL))$message, "`.\n\nTo confirm this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads. If an error results, email IRMA support (irma@nps.gov) for assistance."))
+         urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Error retrieving park_name unit boundary data from IRMA. The message from the web service is: `", http_status(GET(unitBoundaryURL))$message, "`.\n\nTo confirm this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads. If an error results, email IRMA support (irma@nps.gov) for assistance."))
        )
        }
 
@@ -238,7 +206,7 @@ FuncParkBoundaries <- function(park_vec) {
     imported_dat <- tryCatch(rgdal::readOGR(dsn = tempUnitOutput, dropNULLGeometries = FALSE), error=function(e) print("Error retrieving data")) # return error message if problems still arise with downloading from web services
     if(class(imported_dat)!="SpatialPolygonsDataFrame") {
        showModal(
-         urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Could not successfully retrieve Park unit boundary data from IRMA. To see if this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads with boundary information in geojson format. If necessary, email IRMA support (irma@nps.gov) for assistance."))
+         urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Could not successfully retrieve park_name unit boundary data from IRMA. To see if this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads with boundary information in geojson format. If necessary, email IRMA support (irma@nps.gov) for assistance."))
        )
     }
 
@@ -259,19 +227,19 @@ FuncCalcChange <- function(dat) {
   # Returns:
   #   A data frame with an additional column calculating change in pin height per year. When prior survey is NA, will calculate pin difference and date difference from the last non-NA pin height.
   #
-  dat$TempEventDate <- dat$EventDate # need this to calculate DIffDays correctly (skipping the NA dates, but still need EventDate to order the readings correctly)
-  dat$TempEventDate[is.na(dat$PinHeightMm1)] <- NA
+  dat$temp_visit_date <- dat$visit_date # need this to calculate DIffDays correctly (skipping the NA dates, but still need visit_date to order the readings correctly)
+  dat$temp_visit_date[is.na(dat$pin_height_mm)] <- NA
   temp_dat <- dat %>%
-    dplyr::group_by(Park, ParkCode, SiteName, StationName, PipeDirection, PinPosition) %>%
-    dplyr::arrange(EventDate) %>%
+    dplyr::group_by(park_name, park_code, site_name, station_name, SET_direction_azimuth, pin_positionB) %>%
+    dplyr::arrange(visit_date) %>%
     dplyr::mutate(
-      # DiffMMHeight = PinHeightMm1 - zoo::na.locf(dplyr::lag(PinHeightMm1, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
-      # DiffDays = TempEventDate - zoo::na.locf(dplyr::lag(TempEventDate, order_by = EventDate), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
-      DiffMMHeight = PinHeightMm1 - dplyr::lag(PinHeightMm1),
-      DiffDays = TempEventDate - dplyr::lag(TempEventDate),
-      ChangeMMPerYear = round((DiffMMHeight/as.double(DiffDays, units = "days"))*365, 1)
+      # diff_height_mm = pin_height_mm - zoo::na.locf(dplyr::lag(pin_height_mm, order_by = visit_date), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
+      # diff_days = temp_visit_date - zoo::na.locf(dplyr::lag(temp_visit_date, order_by = visit_date), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
+      diff_height_mm = pin_height_mm - dplyr::lag(pin_height_mm),
+      diff_days = temp_visit_date - dplyr::lag(temp_visit_date),
+      change_per_year_mm = round((diff_height_mm/as.double(diff_days, units = "days"))*365, 1)
     ) %>%
-    dplyr::select(-TempEventDate) %>%
+    dplyr::select(-temp_visit_date) %>%
     dplyr::ungroup()
   
   return(temp_dat)
@@ -292,66 +260,66 @@ FuncUpdateCheckCols = function(input_edit, output_table, proxyDT) {
   j = info$col
   v = info$value
 
-  ID_change <- rv$SubDataSETRaw$RecordID[i]
-  rv$DataSET[rv$DataSET$RecordID==ID_change, "QAQC_COMMENTS"] <<- DT::coerceValue(v, rv$DataSET[rv$DataSET$RecordID==ID_change, "QAQC_COMMENTS"]) # update in the raw
+  ID_change <- rv$SubDataSETRaw$record_ID[i]
+  rv$DataSET[rv$DataSET$record_ID==ID_change, "QAQC_COMMENTS"] <<- DT::coerceValue(v, rv$DataSET[rv$DataSET$record_ID==ID_change, "QAQC_COMMENTS"]) # update in the raw
 
 }
 
 FuncCalcQuant <- function(dat, sel_unit) {
-  # Function to classify ChangeMMPerYear by user-specified groups and quantiles
+  # Function to classify change_per_year_mm by user-specified groups and quantiles
   #
   # Args:
   #   dat:  A filtered SET data frame for the selected site
   #   sel_unit:  Metric to calculate threshold categories on
   #
   # Returns:
-  #   A data frame with an additional columns classifying ChangeMMPerYear relative to specified quantiles per group
+  #   A data frame with an additional columns classifying change_per_year_mm relative to specified quantiles per group
   #
   dat <- droplevels(dat)
-  names(dat)[names(dat) == sel_unit] <- "Unit"
+  names(dat)[names(dat) == sel_unit] <- "unit"
   dat %<>% dplyr::mutate(
     GroupingVar = switch(input$sel_QuantileGroup,
-                         "site" = SiteName,
-                         "station" = StationName)) 
+                         "site" = site_name,
+                         "station" = station_name)) 
   quant_list <- dat %>%
     dplyr::group_by(GroupingVar) %>%
-  group_map(~ quantile(.x$Unit, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
+  group_map(~ quantile(.x$unit, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
   quant_df <- data.frame(do.call("rbind", quant_list))
-  names(quant_df) <- c("LowerCutoff", "UpperCutoff")
+  names(quant_df) <- c("lower_cutoff", "upper_cutoff")
   quant_df$GroupingVar <- levels(dat$GroupingVar)
   
   dat2 <- dat %>%
     dplyr::left_join(quant_df, by = "GroupingVar")
-  dat2$Level <- ifelse(
-      dat2$Unit < dat2$LowerCutoff, "below", ifelse(
-      dat2$Unit > dat2$UpperCutoff, "above", "between(inclusive)"))
+  dat2$level <- ifelse(
+      dat2$unit < dat2$lower_cutoff, "below", ifelse(
+      dat2$unit > dat2$upper_cutoff, "above", "between(inclusive)"))
   dat2$GroupingVar <- NULL
-  dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
-  names(dat)[names(dat) == "Unit"] <- sel_unit
+  dat2$level <- factor(dat2$level, levels = c("below", "between(inclusive)", "above"))
+  names(dat)[names(dat) == "unit"] <- sel_unit
   return(dat2)
   }
 
 FuncCalcThresh <- function(dat, sel_unit) {
-  # Function to classify ChangeMMPerYear by user-specified numeric thresholds
+  # Function to classify change_per_year_mm by user-specified numeric thresholds
   #
   # Args:
   #   dat:  A filtered SET data frame for the specified site
   #   sel_unit:  Metric to calculate threshold categories on
   #
   # Returns:
-  #   A data frame with an additional column classifying ChangeMMPerYear relative to specified thresholds
+  #   A data frame with an additional column classifying change_per_year_mm relative to specified thresholds
   #
   dat <- droplevels(dat)
-  names(dat)[names(dat) == sel_unit] <- "Unit"
+  names(dat)[names(dat) == sel_unit] <- "unit"
   dat2 <- dat
-  dat2$LowerCutoff <- input$sel_ThresholdLower
-  dat2$UpperCutoff <- input$sel_ThresholdUpper
-  dat2$Level <- ifelse(
-      dat2$Unit < dat2$LowerCutoff, "below", ifelse(
-      dat2$Unit > dat2$UpperCutoff, "above", "between(inclusive)"))
+  dat2$lower_cutoff <- input$sel_ThresholdLower
+  dat2$upper_cutoff <- input$sel_ThresholdUpper
+  dat2$level <- ifelse(
+      dat2$unit < dat2$lower_cutoff, "below", ifelse(
+      dat2$unit > dat2$upper_cutoff, "above", "between(inclusive)"))
   
-  dat2$Level <- factor(dat2$Level, levels = c("below", "between(inclusive)", "above"))
-  names(dat2)[names(dat2) == "Unit"] <- sel_unit
+  dat2$level <- factor(dat2$level, levels = c("below", "between(inclusive)", "above"))
+  names(dat2)[names(dat2) == "unit"] <- sel_unit
   return(dat2)
 }
   
@@ -369,23 +337,23 @@ FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess
   #   List of scatterplot
   # 
   
-  shiny::req(sum(!is.na(dat$PinHeightMm1)) > 0) # make sure there are data
+  shiny::req(sum(!is.na(dat$pin_height_mm)) > 0) # make sure there are data
   
-  if(x_nam == "EventDate") {
-    xaxes_min = min(dat$EventDate, na.rm = TRUE)
-    xaxes_max = max(dat$EventDate, na.rm = TRUE)
+  if(x_nam == "visit_date") {
+    xaxes_min = min(dat$visit_date, na.rm = TRUE)
+    xaxes_max = max(dat$visit_date, na.rm = TRUE)
   }
   
-  yaxes_min = min(dat$PinHeightMm1, na.rm = TRUE)
-  yaxes_max = max(dat$PinHeightMm1, na.rm = TRUE)
+  yaxes_min = min(dat$pin_height_mm, na.rm = TRUE)
+  yaxes_max = max(dat$pin_height_mm, na.rm = TRUE)
   
   # Create the plot(s)
     
-    p_points <- ggplot(data = dat, aes(x = Week, y = PinHeightMm1, text = paste0("Site: ", SiteName, "<br>Station: ", StationName, "<br>Survey date: ", EventDate, "<br>X-value: ", Week, "<br>Y-value: ", PinHeightMm1))) +
+    p_points <- ggplot(data = dat, aes(x = Week, y = pin_height_mm, text = paste0("Site: ", site_name, "<br>Station: ", station_name, "<br>Visit Date: ", visit_date, "<br>X-value: ", Week, "<br>Y-value: ", pin_height_mm))) +
       geom_jitter(aes(fill = Yr, color = Yr), size = 2, alpha = 0.5, show.legend = c(fill = TRUE, color = FALSE, shape = FALSE))
   
     # Create a pretty x-axis
-    if(x_nam == "EventDate") {
+    if(x_nam == "visit_date") {
       p1_points <- p_points + scale_x_date(date_breaks = "1 year", date_labels = "%Y", limits = c(xaxes_min, xaxes_max))
     } else {
       p1_points <- p_points + scale_x_discrete(breaks = levels(dat$Week), drop = FALSE)
@@ -393,7 +361,7 @@ FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess
     
     # If adding loess smooth...
     # if(add_loess) {
-      p1_points <- p1_points + geom_smooth(data = dat, aes(x = Week, y = PinHeightMm1), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
+      p1_points <- p1_points + geom_smooth(data = dat, aes(x = Week, y = pin_height_mm), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
       # }
     
     # Final formatting of plots
@@ -406,16 +374,16 @@ FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess
             legend.position = "top",
             legend.text = element_text(size = 16),
             legend.title = element_text(size = 16)) +
-      facet_wrap(. ~ StationName, drop = TRUE, ncol = 1) # add the name as facet label
+      facet_wrap(. ~ station_name, drop = TRUE, ncol = 1) # add the name as facet label
     out_plotly <- ggplotly(
       p1_points,
-      height = 400*length(unique(dat$StationName))) # THIS IS NOT WORKING--CAN'T SCROLL DOWN
+      height = 400*length(unique(dat$station_name))) # THIS IS NOT WORKING--CAN'T SCROLL DOWN
     
   return(out_plotly)
 }
 
 FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ffa500"), discrete_levels = c("below", "between(inclusive)", "above")) {
-  # Function to create plotly heatmaps of ChangeMMPerYear, organized station. Using plot_ly because ggplotly is too slow for interactive heat plots b/c it doesn't recognize the input as a heatmap and creates a scatterplot where each rectangle is drawn separately with all the necessary attributes. 
+  # Function to create plotly heatmaps of change_per_year_mm, organized station. Using plot_ly because ggplotly is too slow for interactive heat plots b/c it doesn't recognize the input as a heatmap and creates a scatterplot where each rectangle is drawn separately with all the necessary attributes. 
   #
   # Args:
   #   dat:  A filtered SET data frame with quantile/threshold classification for a single site
@@ -427,43 +395,43 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
   #
   dat2 <- dat %>%
     ungroup() %>%
-    dplyr::select(RecordID, SiteName, StationName, PipeDirection, PinPosition, EventDate, PinHeightMm1, SetDirectionNotes, PinFlag, DiffMMHeight, DiffDays, ChangeMMPerYear, LowerCutoff, UpperCutoff, Level) %>%
-    dplyr::arrange(RecordID) %>%
-    dplyr::mutate(HoverLabel = paste0("Record ID: ", RecordID, "<br>Date: ", EventDate, "<br>Pin Flag: ", PinFlag, "<br>Set Direction Notes: ", SetDirectionNotes, "<br>Pin Position: ", PinPosition, "<br>Pin Height (mm): ", PinHeightMm1, "<br>Height Diff (mm): ", DiffMMHeight, "<br>Days Diff: ", DiffDays, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>Change Per Yr (mm): ", ChangeMMPerYear, "<br>LEVEL: ", Level)) %>%
+    dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, pin_positionB, visit_date, pin_height_mm, observation_type, PinFlag, diff_height_mm, diff_days, change_per_year_mm, lower_cutoff, upper_cutoff, level) %>%
+    dplyr::arrange(record_ID) %>%
+    dplyr::mutate(hover_label = paste0("Record ID: ", record_ID, "<br>Visit Date: ", visit_date, "<br>Observation Type: ", observation_type, "<br>Pin Position: ", pin_positionB, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Change Per Yr (mm): ", change_per_year_mm, "<br>LEVEL: ", level)) %>%
     droplevels()
   
   # Calculate total and relative heights
   temp_distinct <- dat2 %>% 
-    dplyr::select(StationName, PipeDirection, PinPosition) %>%
+    dplyr::select(station_name, SET_direction_azimuth, pin_positionB) %>%
     distinct()
   total_page_ht <- 30*nrow(temp_distinct)
-  rel_hts <- (temp_distinct %>% dplyr::count(StationName) %>% pull(n))/nrow(temp_distinct)
+  rel_hts <- (temp_distinct %>% dplyr::count(station_name) %>% pull(n))/nrow(temp_distinct)
   
-  heat_station_list <- vector("list", length = length(unique(dat2$StationName))) # each list element is a station
+  heat_station_list <- vector("list", length = length(unique(dat2$station_name))) # each list element is a station
   
- heat_station_list <- lapply(sort(unique(dat2$StationName)), function(i) {
+ heat_station_list <- lapply(sort(unique(dat2$station_name)), function(i) {
     
     # Data for this station
-    subdat <- dplyr::filter(dat2, StationName == i) %>%
+    subdat <- dplyr::filter(dat2, station_name == i) %>%
       droplevels()
     
     # Pipe directions for this station
-    pipe_dxn_list <- vector("list", length = length(unique(subdat$PipeDirection)))
-    pipe_dxn_list <- lapply(sort(unique(subdat$PipeDirection)), function(j) { # subplot the pipe directions for a station
-      subdat_pipe <- dplyr::filter(subdat, PipeDirection == j)
+    pipe_dxn_list <- vector("list", length = length(unique(subdat$SET_direction_azimuth)))
+    pipe_dxn_list <- lapply(sort(unique(subdat$SET_direction_azimuth)), function(j) { # subplot the pipe directions for a station
+      subdat_pipe <- dplyr::filter(subdat, SET_direction_azimuth == j)
   
     # create number matrix to put values in the heatmap cells
     template <- subdat_pipe %>%
-      dplyr::select(PinPosition, EventDate) %>%
-      expand(PinPosition, EventDate) %>%
-      left_join(subdat_pipe[c("PipeDirection", "PinPosition", "EventDate", "ChangeMMPerYear", "DiffMMHeight", "HoverLabel", "Level")], by = c("PinPosition", "EventDate")) %>%
-      dplyr::arrange(EventDate, PinPosition)
-    txt <- matrix(pull(template, input$sel_CalcUnit), nrow=length(unique(template$PinPosition)))
+      dplyr::select(pin_positionB, visit_date) %>%
+      expand(pin_positionB, visit_date) %>%
+      left_join(subdat_pipe[c("SET_direction_azimuth", "pin_positionB", "visit_date", "change_per_year_mm", "diff_height_mm", "hover_label", "level")], by = c("pin_positionB", "visit_date")) %>%
+      dplyr::arrange(visit_date, pin_positionB)
+    txt <- matrix(pull(template, input$sel_CalcUnit), nrow=length(unique(template$pin_positionB)))
     txt[is.na(txt)] <- " " # convert NA to blank, otherwise it will show as "new text"
 
         
         # Create discrete color scale
-  use_cols <- discrete_cols[which(discrete_levels %in% unique(na.omit(template$Level)))]
+  use_cols <- discrete_cols[which(discrete_levels %in% unique(na.omit(template$level)))]
   temp_seq <- seq(0,1, length.out = length(use_cols)+1)
   rep_seq <- rep(temp_seq[c(-1, -length(temp_seq))], each = 2)
   z = c(temp_seq[1], rep_seq, temp_seq[length(temp_seq)])
@@ -473,15 +441,15 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
       data = template, 
       source = "heat_plot",
       text = text,
-      width = 52*length(unique(template$EventDate)), 
+      width = 52*length(unique(template$visit_date)), 
       height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
       showscale = FALSE) %>%
       plotly::add_heatmap(
-        x = ~as.factor(EventDate),
-        y = ~as.integer(PinPosition),
-        text = ~HoverLabel, # hover information
+        x = ~as.factor(visit_date),
+        y = ~as.integer(pin_positionB),
+        text = ~hover_label, # hover information
         hoverinfo ="text",
-        z = ~as.numeric(factor(template$Level, ordered = T, levels = discrete_levels)), # assign discrete colors to the cells
+        z = ~as.numeric(factor(template$level, ordered = T, levels = discrete_levels)), # assign discrete colors to the cells
         colorscale = color_scale, 
         xgap = 0.5, # spacing between heatmap cells
         ygap = 0.5
@@ -497,13 +465,13 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
           dtick = 1)
         ) %>%
       add_annotations( 
-        x = template$EventDate,
-        y = as.integer(template$PinPosition),
+        x = template$visit_date,
+        y = as.integer(template$pin_positionB),
         align = "center",
         text = txt, # add the values in the cells 
         showarrow = FALSE) %>%
       add_annotations( # Pipe Direction subtitle
-        text = paste0("Pipe Direction ", unique(template$PipeDirection)),
+        text = paste0("Pipe Direction ", unique(template$SET_direction_azimuth)),
         xref = "paper",
         yref = "paper",
         x = 0.5,
@@ -569,7 +537,7 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
 }
 
 FuncPlotlyPieMatrix <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ffa500"), discrete_levels = c("below", "between(inclusive)", "above")) {
-  # Function to create plotly pie chart matrix of ChangeMMPerYear, organized by user-selected grouping. 
+  # Function to create plotly pie chart matrix of change_per_year_mm, organized by user-selected grouping. 
   #
   # Args:
   #   dat:  A filtered SET data frame with quantile/threshold classification for a single site
@@ -582,20 +550,20 @@ FuncPlotlyPieMatrix <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#f
   
   fig <- plot_ly()
   
-  for(s in 1:length(unique(dat$StationName))) {
-    station <- sort(unique(dat$StationName))[s]
-    for(d in 2:length(unique(dat$EventDate))) { # first date is always NA's for change in pin height
-      survey_date <- sort(unique(dat$EventDate))[d]
+  for(s in 1:length(unique(dat$station_name))) {
+    station <- sort(unique(dat$station_name))[s]
+    for(d in 2:length(unique(dat$visit_date))) { # first date is always NA's for change in pin height
+      survey_date <- sort(unique(dat$visit_date))[d]
       fig <- fig %>% 
         
-        add_pie(data = dplyr::filter(dat, StationName == station & EventDate == survey_date),
-                labels = ~Level, 
+        add_pie(data = dplyr::filter(dat, station_name == station & visit_date == survey_date),
+                labels = ~level, 
                 values = ~N,
                 textposition = 'inside',
                 textinfo = 'label+percent',
                 insidetextfont = list(color = '#FFFFFF'),
                 hoverinfo = 'text',
-                text = ~HoverLabel,
+                text = ~hover_label,
                 marker = list(colors = discrete_cols, line = list(color = '#FFFFFF', width = 1)),
                 domain = list(row = s-1, column = d-1))
       }
@@ -605,13 +573,13 @@ FuncPlotlyPieMatrix <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#f
     title = "Pie Charts with Subplots", 
     showlegend = FALSE,
     grid=list(
-      rows=length(unique(dat$StationName)),
-      columns=length(unique(dat$EventDate))),
+      rows=length(unique(dat$station_name)),
+      columns=length(unique(dat$visit_date))),
     xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
     yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
     autosize = FALSE,
-    width = 80 * length(unique(dat$EventDate)), # 80
-    height = 2 * length(unique(dat$StationName)) #4
+    width = 80 * length(unique(dat$visit_date)), # 80
+    height = 2 * length(unique(dat$station_name)) #4
     )
   
   return(fig)
@@ -644,17 +612,17 @@ FuncOrderCheck <- function(import = TRUE, examine = TRUE, plot = TRUE) {
 
 FuncFormatSET_NERRs <- function(dat) {
   temp_NERRs <- dat %>%
-    dplyr::filter(ParkCode %in% input$sel_ExportParks) %>%
+    dplyr::filter(park_code %in% input$sel_ExportParks) %>%
     dplyr::mutate(
-      reserve = ParkCode,
-      set_id = paste0(StationName, "_Pipe", PipeDirection),
-      year = lubridate::year(EventDate),
-      month = lubridate::month(EventDate),
-      day = lubridate::day(EventDate),
-      arm_position = PipeDirection,
+      reserve = park_code,
+      set_id = paste0(station_name, "_Pipe", SET_direction_azimuth),
+      year = lubridate::year(visit_date),
+      month = lubridate::month(visit_date),
+      day = lubridate::day(visit_date),
+      arm_position = SET_direction_azimuth,
       arm_qaqc_code = NA,
-      pin_number = paste0("pin_", PinPosition),
-      height_mm = PinHeightMm1,
+      pin_number = paste0("pin_", pin_positionB),
+      height_mm = pin_height_mm,
       qaqc_code = NA) %>%
     dplyr::select(reserve, set_id, year, month, day, arm_position, arm_qaqc_code, pin_number, height_mm, qaqc_code)
   return(temp_NERRs)
@@ -691,29 +659,29 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     )
     )
   } else {
-  # Look for files of SET data
-  SET_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*SET Data*")) 
-  shiny::req(!is.null(SET_files_vec))
-  if(length(SET_files_vec) == 0) {
+  # Look for SET pin data file
+  filepath_pin <- Sys.glob(file.path(here::here("Data_in"), "*PinData*")) 
+  shiny::req(!is.null(filepath_pin))
+  if(length(filepath_pin) == 0) {
     showModal(modalDialog(
-      title = "No SET data",
-      "Could not find SET data in the 'Data_in' folder. SET data file names must include the words 'SET Data'"
+      title = "No SET pin data",
+      "Could not find SET pin data in the 'Data_in' folder. SET pin data file name must include the words 'PinData'"
     )
     )
   }
   
-  # Look for files of station data
-  station_files_vec <- Sys.glob(file.path(here::here("Data_in"), "*Station Data*")) 
-  shiny::req(!is.null(station_files_vec))
-    if(length(station_files_vec) == 0) {
+  # Look for SET station data file
+  filepath_station <- Sys.glob(file.path(here::here("Data_in"), "*StationData*")) 
+  shiny::req(!is.null(filepath_station))
+    if(length(filepath_station) == 0) {
     showModal(modalDialog(
-      title = "No station data",
-      "Could not find station data in the 'Data_in' folder. Station data file names must include the words 'Station Data'"
+      title = "No SET station data",
+      "Could not find SET station data in the 'Data_in' folder. Station data file name must include the words 'StationData'"
     )
     )
     }
   }
-  shiny::req(length(SET_files_vec) > 0, length(station_files_vec) > 0)
+  shiny::req(length(filepath_pin) > 0, length(filepath_station) > 0)
   
   withProgress(message = "Just a moment", value = 0, {
     
@@ -721,11 +689,18 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     
     # Combine SET data in a single file
     unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-    temp_SET <- FuncImportList(filepaths_vec = SET_files_vec, is_SET = TRUE) 
-    # %>% dplyr::filter(!is.na(StationName) & !is.na(EventDate) & !is.na(PipeDirection) & !is.na(PinPosition)  & !is.na(PinHeightMm1)) # remove records without result recorded in these important columns >>>>>>>>>>>>>>>>>>> REDO WITH complete.cases
+    temp_pin <- read.csv(filepath_pin, fileEncoding="UTF-8-BOM") # need to add fileEncoding argument so doesn't add junk characters to first column name
+    temp_station <- read.csv(filepath_station, fileEncoding="UTF-8-BOM")
     
-    factor_cols <- c("Park", "ParkCode", "SiteName", "StationName", "PipeDirection", "PinPosition", "DataProcessingLevel", "ObservationType1", "PinFlag")
-    temp_SET[factor_cols] <- lapply(temp_SET[factor_cols], factor) # convert to factors so can use drop-down lists in data tables
+    factor_cols <- c("datum", "double_read_type", "dpl_label", "network_code", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag_code", "pin_label", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status")
+    integer_cols <- c("SET_offset_mm", "pin_length_mm", "pin_height_mm", "standardized_soil_elev_mm") # <<<<<<<<<<<<<<<<<<<<<< CHECK THESE
+    
+    temp_pin2 <- temp_pin %>% # for easier filtering
+      dplyr::mutate_at(vars(matches(factor_cols)), as.factor) %>%
+      dplyr::mutate_at(vars(matches(integer_cols)), as.integer) %>%
+      dplyr::mutate_at(vars(matches("_date")), lubridate::as_date, format = "%m/%d/%Y")
+      dplyr
+# <<<<<<<<<<<<< PICK UP FROM HERE. MAKE SURE COL NAMES MATCH. CHANGE URL FOR GETTING PARK BOUNDARIES, ETC.
     temp_SET2 <- FuncBreakDates(dat = temp_SET)
     rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_SET2))
     rv$DataStation <- as.data.frame(FuncImportList(filepaths_vec = station_files_vec))
@@ -793,10 +768,10 @@ observeEvent(eventExpr = input$saved_data_file, {
   if(!is.null(rv$DataSET)) {
     rv$DataSET %<>% 
       dplyr::mutate(
-        EventDate = lubridate::as_date(EventDate, format = "%m/%d/%Y"),
-        Yr = lubridate::year(EventDate), # for annual summaries
-        Mnth = factor(lubridate::month(EventDate), levels = 1:12),
-        Week = factor(lubridate::week(EventDate), levels = 1:53)
+        visit_date = lubridate::as_date(visit_date, format = "%m/%d/%Y"),
+        Yr = lubridate::year(visit_date), # for annual summaries
+        Mnth = factor(lubridate::month(visit_date), levels = 1:12),
+        Week = factor(lubridate::week(visit_date), levels = 1:53)
       )
   }
 
@@ -827,10 +802,10 @@ observeEvent(eventExpr = input$button_RunDataCheck, {
 withProgress(message = "Generating data check report...", value = 0, { # show progress bar
     
     check_sub <- rv$SubDataSET %>%
-      dplyr::select(-QAQC_COMMENTS, -RecordID, -SetDirectionNotes, -DiffMMHeight, -DiffDays, -ChangeMMPerYear) %>%
-      dplyr::mutate(StationName = as.character(StationName),
-                    EventDate = as.character(EventDate)) %>%
-      dplyr::filter(StationName == rv$SubDataSummary[input$out_TableSummary_rows_selected, "StationName"])
+      dplyr::select(-QAQC_COMMENTS, -record_ID, -observation_type, -diff_height_mm, -diff_days, -change_per_year_mm) %>%
+      dplyr::mutate(station_name = as.character(station_name),
+                    visit_date = as.character(visit_date)) %>%
+      dplyr::filter(station_name == rv$SubDataSummary[input$out_TableSummary_rows_selected, "station_name"])
 
     shiny::req(!is.null(check_sub))
     if(nrow(check_sub) > 0) {
@@ -843,7 +818,7 @@ dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
   numeric = "standardVisual",
   integer = "standardVisual",
   logical = "vertLabStandardVisual",
-  Date = "standardVisual"), listChecks = FALSE, smartNum = FALSE, reportTitle = paste0("Station ", toupper(as.character(rv$SubDataSummary[input$out_TableSummary_rows_selected, "StationName"]))), render = TRUE, output = "html", openResult = FALSE, replace = TRUE, useVar = names(check_sub), file = "dataMaid.Rmd")
+  Date = "standardVisual"), listChecks = FALSE, smartNum = FALSE, reportTitle = paste0("Station ", toupper(as.character(rv$SubDataSummary[input$out_TableSummary_rows_selected, "station_name"]))), render = TRUE, output = "html", openResult = FALSE, replace = TRUE, useVar = names(check_sub), file = "dataMaid.Rmd")
       rv$ShowDM <- file.exists(here::here("dataMaid.html"))
 
     }
@@ -859,7 +834,7 @@ showModal(modalDialog(
 renderUI({
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_HeatSite))
 
-  rv$SeasonalPlots <- FuncPlotlyScatter(dat = dplyr::filter(rv$SubDataSET, SiteName == input$sel_HeatSite))
+  rv$SeasonalPlots <- FuncPlotlyScatter(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_HeatSite))
   Sys.sleep(1)
 })
 
@@ -872,20 +847,20 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     # Calculate threshold levels
     if(input$sel_ThresholdType == "quant") {
     shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
-    rv$ThreshDataSET <- FuncCalcQuant(dat = dplyr::filter(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
+    rv$ThreshDataSET <- FuncCalcQuant(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
     }
     cat("line772")
 
     if(input$sel_ThresholdType == "numb") {
       shiny::req(!is.null(input$sel_CalcUnit), !is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
-      rv$ThreshDataSET <- FuncCalcThresh(dat = dplyr::filter(rv$SubDataSET, SiteName == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
+      rv$ThreshDataSET <- FuncCalcThresh(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_HeatSite), sel_unit = input$sel_CalcUnit)
     }
     cat("line777")
     # Create heat plots
     shiny::req(!is.null(rv$ThreshDataSET))
     # pick_list <- rv$ThreshDataSET %>% # pick-list for user clicks on heat plot
-    #   dplyr::select(StationName, PipeDirection) %>%
-    #   dplyr::arrange(StationName, PipeDirection) %>%
+    #   dplyr::select(station_name, SET_direction_azimuth) %>%
+    #   dplyr::arrange(station_name, SET_direction_azimuth) %>%
     #   distinct()
     # pick_list$curveNumber <- 0:(nrow(pick_list)-1)
     # rv$PickList <- pick_list
@@ -894,19 +869,19 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     cat("line788")
     # Count threshold levels
     rv$ThreshCounts <- rv$ThreshDataSET %>%
-    dplyr::select(RecordID, ParkCode, SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level) %>%
-    dplyr::group_by(ParkCode, SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level, .drop = FALSE) %>%
+    dplyr::select(record_ID, park_code, site_name, station_name, visit_date, lower_cutoff, upper_cutoff, level) %>%
+    dplyr::group_by(park_code, site_name, station_name, visit_date, lower_cutoff, upper_cutoff, level, .drop = FALSE) %>%
     dplyr::summarise(N = n()) %>%
-    dplyr::mutate(HoverLabel = paste0("Park: ", ParkCode, "<br>Station: ", StationName, "<br>Date: ", EventDate, "<br>Upper Cutoff: ", UpperCutoff, "<br>LowerCutoff", LowerCutoff, "<br>LEVEL: ", Level, "<br>COUNT: ", N))
+    dplyr::mutate(hover_label = paste0("park_name: ", park_code, "<br>Station: ", station_name, "<br>Date: ", visit_date, "<br>Upper Cutoff: ", upper_cutoff, "<br>lower_cutoff", lower_cutoff, "<br>LEVEL: ", level, "<br>COUNT: ", N))
     cat("line795")
     # Create map
     shiny::req(!is.null(rv$ThreshCounts), !is.null(rv$DataStation))
     rv$MapDat <- rv$ThreshCounts %>%
       dplyr::ungroup() %>%
-      dplyr::select(SiteName, StationName, EventDate, LowerCutoff, UpperCutoff, Level, N) %>%
-      dplyr::filter(EventDate != min(rv$ThreshCounts$EventDate, na.rm = TRUE)) %>% # first survey date is all NA's so omit
-      spread(key = Level, value = N, drop = FALSE, fill = 0) %>%
-      left_join(unique(rv$DataStation[c("Park", "ParkCode", "SiteName", "StationName", "Latitude", "Longitude")]), by = c("SiteName", "StationName"))
+      dplyr::select(site_name, station_name, visit_date, lower_cutoff, upper_cutoff, level, N) %>%
+      dplyr::filter(visit_date != min(rv$ThreshCounts$visit_date, na.rm = TRUE)) %>% # first survey date is all NA's so omit
+      spread(key = level, value = N, drop = FALSE, fill = 0) %>%
+      left_join(unique(rv$DataStation[c("park_name", "park_code", "site_name", "station_name", "Latitude", "Longitude")]), by = c("site_name", "station_name"))
     })
   cat("line805")
 saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
@@ -936,13 +911,13 @@ renderUI({
   shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park), !is.null(input$sel_YrRange[1]), !is.null(input$sel_YrRange[2]), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
 
   temp_subdata <- rv$DataSET %>%
-  dplyr::filter(Park == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType) 
+  dplyr::filter(park_name == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType) 
 
   shiny::req(!is.null(temp_subdata))
   shiny::req(nrow(temp_subdata) > 0)
 
   temp_summary <- temp_subdata %>%
-    dplyr::group_by(Park, SiteName, StationName) %>%
+    dplyr::group_by(park_name, site_name, station_name) %>%
     dplyr::summarize(
       MinYr = as.integer(min(Yr, na.rm = TRUE)),
       MaxYr = as.integer(max(Yr, na.rm = TRUE)),
@@ -982,9 +957,9 @@ renderUI({
   if(!is.null(input$out_TableSummary_rows_selected)) {
 
   rv$SubDataSETRaw <- rv$SubDataSET %>%
-    dplyr::mutate(StationName = as.character(StationName)) %>%
-    dplyr::filter(StationName ==  rv$SubDataSummary[input$out_TableSummary_rows_selected, "StationName"]) %>% # user-selected station
-    dplyr::select(-Yr, -Mnth, -Week, -DiffMMHeight, -DiffDays, -ChangeMMPerYear)
+    dplyr::mutate(station_name = as.character(station_name)) %>%
+    dplyr::filter(station_name ==  rv$SubDataSummary[input$out_TableSummary_rows_selected, "station_name"]) %>% # user-selected station
+    dplyr::select(-Yr, -Mnth, -Week, -diff_height_mm, -diff_days, -change_per_year_mm)
   }
   Sys.sleep(0.25) # Need to give it time to update, or will generate warning on dashboard
 })
@@ -1049,7 +1024,7 @@ Column {data-width=5}
 
 Column {data-width=60}
 -------------------------------------
-#### <font size="5"> Monitoring Wetland Elevation Dynamics in National Park Units</font> 
+#### <font size="5"> Monitoring Wetland Elevation Dynamics in National park_name Units</font> 
 
 <font size="4"> 
 This dashboard is an interactive tool for QAQC and visualizing wetland elevation data collected in national park units. Wetland elevation is monitored using the Surface Elevation Table (SET) and marker horizons. Summary tables and graphs can be exported as .csv and .png files, respectively.</font>
@@ -1089,9 +1064,9 @@ shinyjs::hidden( # hide this well panel until !is.null(rv$DataSET)
       shiny::req(!is.null(rv$DataSET))
       selectInput(
         "sel_Park",
-        label = "Select a Park: ",
-        choices = sort(unique(rv$DataSET$Park)),
-        selected = switch(is.null(input$sel_Park)+1, input$sel_Park, sort(unique(rv$DataSET$Park))[1])
+        label = "Select a park_name: ",
+        choices = sort(unique(rv$DataSET$park_name)),
+        selected = switch(is.null(input$sel_Park)+1, input$sel_Park, sort(unique(rv$DataSET$park_name))[1])
         )
       }),
     
@@ -1120,11 +1095,11 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
       sliderInput(
         "sel_YrRange",
         label = "Range of years to summarize:", 
-        min = min(rv$DataSET$Yr[rv$DataSET$Park == input$sel_Park], na.rm = TRUE), 
-        max = max(rv$DataSET$Yr[rv$DataSET$Park == input$sel_Park], na.rm = TRUE), 
+        min = min(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
+        max = max(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
         step = 1, 
         sep="", 
-        value = c(min(rv$DataSET$Yr[rv$DataSET$Park == input$sel_Park], na.rm = TRUE), max(rv$DataSET$Yr[rv$DataSET$Park == input$sel_Park], na.rm = TRUE)), 
+        value = c(min(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), max(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE)), 
         dragRange = TRUE, 
         width = "85%")
       }),
@@ -1228,9 +1203,9 @@ renderUI({
       selectInput(
         "sel_HeatSite",
         label = "Select a Site: ",
-        choices = sort(unique(rv$SubDataSET$SiteName)),
+        choices = sort(unique(rv$SubDataSET$site_name)),
         selected = switch(is.null(input$sel_HeatSite)+1, input$sel_HeatSite,
-                          sort(unique(rv$SubDateSET$SiteName))[1])
+                          sort(unique(rv$SubDateSET$site_name))[1])
         )
       })
 
@@ -1243,8 +1218,8 @@ shinyjs::hidden( # hide this well panel until !is.null(rv$SubDataSET)
       radioButtons("sel_CalcUnit",
                    label = "Measurement unit:",
                    choiceNames = list("Change(mm) per year", "Change(mm) from prior"),
-                   choiceValues = list("ChangeMMPerYear", "DiffMMHeight"),
-                   selected = "ChangeMMPerYear")
+                   choiceValues = list("change_per_year_mm", "diff_height_mm"),
+                   selected = "change_per_year_mm")
       }),
       
     
@@ -1334,9 +1309,9 @@ renderPlot({
   # hacky legend because plotly heatmaps can't generate horizontal colorbars
   heat_legend <- grid.arrange(ggpubr::as_ggplot(
     get_legend(
-      ggplot(rv$ThreshDataSET, aes(x = EventDate, y = PinPosition, fill = Level)) +
+      ggplot(rv$ThreshDataSET, aes(x = visit_date, y = pin_positionB, fill = level)) +
         geom_tile() + 
-        scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = switch((input$sel_CalcUnit == "ChangeMMPerYear")+1, "Threshold Category (CHANGE SINCE PRIOR):   ", "Threshold Category (CHANGE PER YEAR):  ")) + 
+        scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = switch((input$sel_CalcUnit == "change_per_year_mm")+1, "Threshold Category (CHANGE SINCE PRIOR):   ", "Threshold Category (CHANGE PER YEAR):  ")) + 
         theme(legend.position = "top",
               legend.key.width = unit(1, "cm"),
               legend.text = element_text(size = 16, margin = margin(r = 2, unit = "cm")),
@@ -1386,15 +1361,15 @@ output$out_ThreshMap <- renderLeaflet({
   
   thresh_map <- leaflet() %>%
     addProviderTiles("Esri.WorldImagery", options = providerTileOptions(noWrap = TRUE)) %>%
-    # addPolygons(data = rv$UnitPoly[rv$UnitPoly@data$UNIT_CODE == unique(rv$MapDat$ParkCode),], layerId = rv$UnitPoly@data$UNIT_CODE, stroke = TRUE, color = "white", weight = 1, opacity = 1, fillOpacity = 0) %>% # park unit outline
+    # addPolygons(data = rv$UnitPoly[rv$UnitPoly@data$UNIT_CODE == unique(rv$MapDat$park_code),], layerId = rv$UnitPoly@data$UNIT_CODE, stroke = TRUE, color = "white", weight = 1, opacity = 1, fillOpacity = 0) %>% # park unit outline
     addScaleBar() %>% 
     addMinicharts(
       lng = rv$MapDat$Longitude,
       lat = rv$MapDat$Latitude,
-      time = rv$MapDat$EventDate,
+      time = rv$MapDat$visit_date,
       type = "pie",
       transitionTime = 0,
-      layerId = rv$MapDat$StationName, # doesn't work with a label field
+      layerId = rv$MapDat$station_name, # doesn't work with a label field
       height = input$sel_MapPieSize,
       width = input$sel_MapPieSize,
       chartdata = as.matrix(subset(rv$MapDat, select = discrete_levels)),
@@ -1431,8 +1406,8 @@ renderUI({
   shiny::req(!is.null(rv$DataSET))
   checkboxGroupInput("sel_ExportParks",
     label = "Include data for these Parks: ",
-    choices = sort(unique(rv$DataSET$ParkCode)),
-    selected = sort(unique(rv$DataSET$ParkCode))
+    choices = sort(unique(rv$DataSET$park_code)),
+    selected = sort(unique(rv$DataSET$park_code))
     )
   })
     
