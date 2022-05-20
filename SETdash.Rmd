@@ -8,8 +8,6 @@ runtime: shiny
 ---
 
 ```{r global, include=FALSE}
-# saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-# saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
 ### FIX
 # Heat plot legend should not update until recalculate thresholds button is pressed
@@ -29,9 +27,9 @@ runtime: shiny
 # Converted all tibbles to data frames to get rid of phantom column name errors
 
 ### QUESTIONS
-# pin_positionB --is that column name correct?
+# pin_position --is that column name correct?
 # check if I identified the correct cols to be factor, integer, date formats
-# Removing records with NA in any of these columns (station_name, visit_date, SET_direction_azimuth, pin_positionB, pin_height_mm)--any reason to keep those in? Can provide an output of which records were excluded, or just a summary of counts
+# Removing records with NA in any of these columns (station_name, visit_date, SET_direction_azimuth, pin_position, pin_height_mm)--any reason to keep those in? Can provide an output of which records were excluded, or just a summary of counts
 # When calculating diff, only use 'Standard observation'?
 # How to deal with some pins having base pin height and others not?
 # On heat map page, do you want to be able to select a park or use previously selected park and filters?
@@ -122,7 +120,7 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 ```
 
 ```{r startup}
-rv <- reactiveValues(DataSET = NULL, DataStation = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, PickList = NULL, ThreshHeatPlots = NULL, SeasonalPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
+rv <- reactiveValues(DataSET = NULL, DataStation = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSETRaw = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, PickList = NULL, ThreshHeatPlots = NULL, SeasonalPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "chartreuse", "lightpink", "honeydew2") # Colorblind-friendly palette that will be used throughout
 ```
@@ -173,7 +171,7 @@ FuncBreakDates <- function(dat) {
       visit_month = factor(lubridate::month(visit_date), levels = 1:12),
       visit_week = factor(lubridate::week(visit_date), levels = 1:53)
     )
-  # dat$Yr <- factor(dat$Yr, levels = min(dat$Yr, na.rm = TRUE):max(dat$Yr, na.rm = TRUE)) # make sure any missing years are still shown in plots
+  # dat$visit_yr <- factor(dat$visit_yr, levels = min(dat$visit_yr, na.rm = TRUE):max(dat$visit_yr, na.rm = TRUE)) # make sure any missing years are still shown in plots
   return(dat)
 }
 
@@ -185,12 +183,8 @@ FuncParkBoundaries <- function(park_vec) {
   #
   # Returns:
   #   A data frame with additional columns classifying survey date by week, month, year
-  #
-  # Get park unit boundary data ----
   
-  park_call <- paste0("UNIT_CODE+%3D+%27", park_vec, "%27", collapse = "+or+")
-  
-     unitBoundaryURL <- paste0("https://irmaservices.nps.gov/arcgis/rest/services/LandscapeDynamics/LandscapeDynamics_AOA/FeatureServer/0/query?where=", park_call, "&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&distance=&units=esriSRUnit_Meter&relationParam=&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=4326&gdbVersion=&returnDistinctValues=false&returnIdsOnly=false&returnCountOnly=false&returnExtentOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&multipatchOption=&resultOffset=&resultRecordCount=&f=geojson") # save output as WGS84
+     unitBoundaryURL <- paste0("https://services1.arcgis.com/fBc8EJBxQRMcHlei/ArcGIS/rest/services/IMD_Units_Generic_areas_of_analysis_(AOAs)_-_IMD_BND_ALL_UNITS_AOA_nad_py_view/FeatureServer/1/query?where=UNITCODE+%3D+%27, park_vec, %27&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&resultType=none&distance=0.0&units=esriSRUnit_Meter&returnGeodetic=false&outFields=*&returnGeometry=true&returnCentroid=false&featureEncoding=esriDefault&multipatchOption=xyFootprint&maxAllowableOffset=&geometryPrecision=&outSR=&defaultSR=&datumTransformation=&applyVCSProjection=false&returnIdsOnly=false&returnUniqueIdsOnly=false&returnCountOnly=false&returnExtentOnly=false&returnQueryGeometry=false&returnDistinctValues=false&cacheHint=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&having=&resultOffset=&resultRecordCount=&returnZ=false&returnM=false&returnExceededLimitFeatures=true&quantizationParameters=&sqlFormat=none&f=pgeojson&token=") # save output as WGS84
 
      if(httr::http_status(GET(unitBoundaryURL))$category!="Success") { # if not a valid service call or if the web service is down, abort
        showModal(
@@ -227,10 +221,11 @@ FuncCalcChange <- function(dat) {
   # Returns:
   #   A data frame with an additional column calculating change in pin height per year. When prior survey is NA, will calculate pin difference and date difference from the last non-NA pin height.
   #
-  dat$temp_visit_date <- dat$visit_date # need this to calculate DIffDays correctly (skipping the NA dates, but still need visit_date to order the readings correctly)
+   lg <- function(x)c(NA, x[1:(length(x)-1)]) # lag function
+  dat$next_visit_date <- c(dat$visit_date[-1], NA) # need this to calculate DIffDays correctly (skipping the NA dates, but still need visit_date to order the readings correctly)
   dat$temp_visit_date[is.na(dat$pin_height_mm)] <- NA
   temp_dat <- dat %>%
-    dplyr::group_by(park_name, park_code, site_name, station_name, SET_direction_azimuth, pin_positionB) %>%
+    dplyr::group_by(park_name, park_code, site_name, station_name, SET_direction_azimuth, pin_position) %>%
     dplyr::arrange(visit_date) %>%
     dplyr::mutate(
       # diff_height_mm = pin_height_mm - zoo::na.locf(dplyr::lag(pin_height_mm, order_by = visit_date), na.rm = FALSE), # when previous value is NA, it finds the difference to the most recent non-NA
@@ -309,6 +304,8 @@ FuncCalcThresh <- function(dat, sel_unit) {
   # Returns:
   #   A data frame with an additional column classifying change_per_year_mm relative to specified thresholds
   #
+    # saveRDS(isolate(reactiveValuesToList(input)), paste0("temp_input.RDS"))
+  # saveRDS(isolate(reactiveValuesToList(rv)), paste0("temp_rv.RDS"))
   dat <- droplevels(dat)
   names(dat)[names(dat) == sel_unit] <- "unit"
   dat2 <- dat
@@ -349,19 +346,19 @@ FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess
   
   # Create the plot(s)
     
-    p_points <- ggplot(data = dat, aes(x = Week, y = pin_height_mm, text = paste0("Site: ", site_name, "<br>Station: ", station_name, "<br>Visit Date: ", visit_date, "<br>X-value: ", Week, "<br>Y-value: ", pin_height_mm))) +
-      geom_jitter(aes(fill = Yr, color = Yr), size = 2, alpha = 0.5, show.legend = c(fill = TRUE, color = FALSE, shape = FALSE))
+    p_points <- ggplot(data = dat, aes(x = visit_week, y = pin_height_mm, text = paste0("Site: ", site_name, "<br>Station: ", station_name, "<br>Visit Date: ", visit_date, "<br>X-value: ", visit_week, "<br>Y-value: ", pin_height_mm))) +
+      geom_jitter(aes(fill = visit_yr, color = visit_yr), size = 2, alpha = 0.5, show.legend = c(fill = TRUE, color = FALSE, shape = FALSE))
   
     # Create a pretty x-axis
     if(x_nam == "visit_date") {
       p1_points <- p_points + scale_x_date(date_breaks = "1 year", date_labels = "%Y", limits = c(xaxes_min, xaxes_max))
     } else {
-      p1_points <- p_points + scale_x_discrete(breaks = levels(dat$Week), drop = FALSE)
+      p1_points <- p_points + scale_x_discrete(breaks = levels(dat$visit_week), drop = FALSE)
     }
     
     # If adding loess smooth...
     # if(add_loess) {
-      p1_points <- p1_points + geom_smooth(data = dat, aes(x = Week, y = pin_height_mm), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
+      p1_points <- p1_points + geom_smooth(data = dat, aes(x = visit_week, y = pin_height_mm), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
       # }
     
     # Final formatting of plots
@@ -395,14 +392,14 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
   #
   dat2 <- dat %>%
     ungroup() %>%
-    dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, pin_positionB, visit_date, pin_height_mm, observation_type, PinFlag, diff_height_mm, diff_days, change_per_year_mm, lower_cutoff, upper_cutoff, level) %>%
+    dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, pin_position, visit_date, pin_height_mm, observation_type, pin_position, diff_height_mm, diff_days, change_per_year_mm, lower_cutoff, upper_cutoff, level) %>%
     dplyr::arrange(record_ID) %>%
-    dplyr::mutate(hover_label = paste0("Record ID: ", record_ID, "<br>Visit Date: ", visit_date, "<br>Observation Type: ", observation_type, "<br>Pin Position: ", pin_positionB, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Change Per Yr (mm): ", change_per_year_mm, "<br>LEVEL: ", level)) %>%
+    dplyr::mutate(hover_label = paste0("Record ID: ", record_ID, "<br>Visit Date: ", visit_date, "<br>Observation Type: ", observation_type, "<br>Pin Position: ", pin_position, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Change Per Yr (mm): ", change_per_year_mm, "<br>LEVEL: ", level)) %>%
     droplevels()
   
   # Calculate total and relative heights
   temp_distinct <- dat2 %>% 
-    dplyr::select(station_name, SET_direction_azimuth, pin_positionB) %>%
+    dplyr::select(station_name, SET_direction_azimuth, pin_position) %>%
     distinct()
   total_page_ht <- 30*nrow(temp_distinct)
   rel_hts <- (temp_distinct %>% dplyr::count(station_name) %>% pull(n))/nrow(temp_distinct)
@@ -422,11 +419,11 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
   
     # create number matrix to put values in the heatmap cells
     template <- subdat_pipe %>%
-      dplyr::select(pin_positionB, visit_date) %>%
-      expand(pin_positionB, visit_date) %>%
-      left_join(subdat_pipe[c("SET_direction_azimuth", "pin_positionB", "visit_date", "change_per_year_mm", "diff_height_mm", "hover_label", "level")], by = c("pin_positionB", "visit_date")) %>%
-      dplyr::arrange(visit_date, pin_positionB)
-    txt <- matrix(pull(template, input$sel_CalcUnit), nrow=length(unique(template$pin_positionB)))
+      dplyr::select(pin_position, visit_date) %>%
+      expand(pin_position, visit_date) %>%
+      left_join(subdat_pipe[c("SET_direction_azimuth", "pin_position", "visit_date", "change_per_year_mm", "diff_height_mm", "hover_label", "level")], by = c("pin_position", "visit_date")) %>%
+      dplyr::arrange(visit_date, pin_position)
+    txt <- matrix(pull(template, input$sel_CalcUnit), nrow=length(unique(template$pin_position)))
     txt[is.na(txt)] <- " " # convert NA to blank, otherwise it will show as "new text"
 
         
@@ -446,7 +443,7 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
       showscale = FALSE) %>%
       plotly::add_heatmap(
         x = ~as.factor(visit_date),
-        y = ~as.integer(pin_positionB),
+        y = ~as.integer(pin_position),
         text = ~hover_label, # hover information
         hoverinfo ="text",
         z = ~as.numeric(factor(template$level, ordered = T, levels = discrete_levels)), # assign discrete colors to the cells
@@ -466,7 +463,7 @@ FuncPlotlyHeatPlot <- function(dat, discrete_cols = c("#ffd700", "#add8e6", "#ff
         ) %>%
       add_annotations( 
         x = template$visit_date,
-        y = as.integer(template$pin_positionB),
+        y = as.integer(template$pin_position),
         align = "center",
         text = txt, # add the values in the cells 
         showarrow = FALSE) %>%
@@ -621,7 +618,7 @@ FuncFormatSET_NERRs <- function(dat) {
       day = lubridate::day(visit_date),
       arm_position = SET_direction_azimuth,
       arm_qaqc_code = NA,
-      pin_number = paste0("pin_", pin_positionB),
+      pin_number = paste0("pin_", pin_position),
       height_mm = pin_height_mm,
       qaqc_code = NA) %>%
     dplyr::select(reserve, set_id, year, month, day, arm_position, arm_qaqc_code, pin_number, height_mm, qaqc_code)
@@ -693,17 +690,26 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     temp_station <- read.csv(filepath_station, fileEncoding="UTF-8-BOM")
     
     factor_cols <- c("datum", "double_read_type", "dpl_label", "network_code", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag_code", "pin_label", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status")
-    integer_cols <- c("SET_offset_mm", "pin_length_mm", "pin_height_mm", "standardized_soil_elev_mm") # <<<<<<<<<<<<<<<<<<<<<< CHECK THESE
+    integer_cols <- c("SET_offset_mm", "pin_length_mm", "pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m") # 
     
-    temp_pin2 <- temp_pin %>% # for easier filtering
-      dplyr::mutate_at(vars(matches(factor_cols)), as.factor) %>%
+    temp_pin %<>% 
+      dplyr::mutate(
+        QAQC_COMMENTS = NA, # add a notes column for user to edit in dashboard
+        record_ID = row_number()) %>%
+      dplyr::select(QAQC_COMMENTS, record_ID, everything()) %>% # arrange column order
+      dplyr::mutate_at(vars(matches(factor_cols)), as.factor) %>% # for easier filtering
       dplyr::mutate_at(vars(matches(integer_cols)), as.integer) %>%
-      dplyr::mutate_at(vars(matches("_date")), lubridate::as_date, format = "%m/%d/%Y")
-      dplyr
-# <<<<<<<<<<<<< PICK UP FROM HERE. MAKE SURE COL NAMES MATCH. CHANGE URL FOR GETTING PARK BOUNDARIES, ETC.
-    temp_SET2 <- FuncBreakDates(dat = temp_SET)
-    rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_SET2))
-    rv$DataStation <- as.data.frame(FuncImportList(filepaths_vec = station_files_vec))
+      dplyr::mutate_at(vars(matches("_date")), lubridate::as_date, format = "%Y-%m-%d")
+      temp_pin$QAQC_COMMENTS <- as.character(temp_pin$QAQC_COMMENTS)
+
+    temp_pin2 <- FuncBreakDates(dat = temp_pin)
+    
+    temp_station2 <- temp_station %>%
+      dplyr::mutate_at(c("network_code", "park_name", "park_code", "site_name", "station_name", "station_code", "station_status", "protected_status"), as.factor) %>%
+      dplyr::mutate_at(vars(matches("_date")), lubridate::as_date, format = "%Y-%m-%d") 
+    
+    rv$DataSET <- as.data.frame(FuncCalcChange(dat = temp_pin2)) # <<<<<<<<<<<<<<<<<< NEED THIS TO BE FASTER. TRY COLLAPSE::SETTRANSFORM, MAYBE ALSO SELECT ONLY NECESSARY COLS
+    rv$DataStation <- temp_station2
     
     shiny::req(!is.null(rv$DataSET))
 
@@ -720,12 +726,12 @@ observeEvent(eventExpr = input$button_ImportCSV, {
     ))
   
   observeEvent(input$button_goSave, {
-    cat("line725")
+   
     if(!dir.exists(file.path(here::here(), "Data_out"))) {
       dir.create(file.path(here::here(), "Data_out"))} # create a 'Data_out' subfolder if it doesn't exist
-    saveRDS(isolate(reactiveValuesToList(rv)), paste0(here::here("Data_out"), input$out_prefix, ".RDS"))
-    cat("line725")
-    write_csv(rv$DataSET, paste0(here::here("Data_out"), input$out_prefix, ".csv"))
+    saveRDS(isolate(reactiveValuesToList(rv)), here::here("Data_out", paste0(input$out_prefix, ".RDS")))
+    
+    write_csv(rv$DataSET, here::here("Data_out", paste0(input$out_prefix, ".csv")))
     
     Sys.sleep(0.25)
     showModal(modalDialog(
@@ -765,15 +771,15 @@ observeEvent(eventExpr = input$saved_data_file, {
     rv[[i]] <- out[[i]] # load the data in the dashboard
     }
   }
-  if(!is.null(rv$DataSET)) {
-    rv$DataSET %<>% 
-      dplyr::mutate(
-        visit_date = lubridate::as_date(visit_date, format = "%m/%d/%Y"),
-        Yr = lubridate::year(visit_date), # for annual summaries
-        Mnth = factor(lubridate::month(visit_date), levels = 1:12),
-        Week = factor(lubridate::week(visit_date), levels = 1:53)
-      )
-  }
+  # if(!is.null(rv$DataSET)) {
+  #   rv$DataSET %<>% 
+  #     dplyr::mutate(
+  #       visit_date = lubridate::as_date(visit_date, format = "%m/%d/%Y"),
+  #       Yr = lubridate::year(visit_date), # for annual summaries
+  #       visit_month = factor(lubridate::month(visit_date), levels = 1:12),
+  #       Week = factor(lubridate::week(visit_date), levels = 1:53)
+  #     )
+  # }
 
   Sys.sleep(0.25)
   showModal(modalDialog(
@@ -796,7 +802,7 @@ observeEvent(eventExpr = input$button_RunDataCheck, {
     )
   }
   shiny::req(!is.null(input$out_TableSummary_rows_selected))
-  
+
   shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary), !is.null(input$out_TableSummary_rows_selected)) 
 
 withProgress(message = "Generating data check report...", value = 0, { # show progress bar
@@ -881,10 +887,9 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
       dplyr::select(site_name, station_name, visit_date, lower_cutoff, upper_cutoff, level, N) %>%
       dplyr::filter(visit_date != min(rv$ThreshCounts$visit_date, na.rm = TRUE)) %>% # first survey date is all NA's so omit
       spread(key = level, value = N, drop = FALSE, fill = 0) %>%
-      left_join(unique(rv$DataStation[c("park_name", "park_code", "site_name", "station_name", "Latitude", "Longitude")]), by = c("site_name", "station_name"))
+      left_join(unique(rv$DataStation[c("park_name", "park_code", "site_name", "station_name", "station_latitude", "station_longitude")]), by = c("site_name", "station_name"))
     })
-  cat("line805")
-saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+
   # Sys.sleep(2)
 })
 ```
@@ -908,10 +913,11 @@ renderUI({
 
 # Filter and summarize data ----
 renderUI({
+ 
   shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park), !is.null(input$sel_YrRange[1]), !is.null(input$sel_YrRange[2]), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
 
   temp_subdata <- rv$DataSET %>%
-  dplyr::filter(park_name == input$sel_Park & Yr >= as.integer(input$sel_YrRange[1]) & Yr <= as.integer(input$sel_YrRange[2]) & DataProcessingLevel %in% input$sel_ProcessLevel & ObservationType1 %in% input$sel_ObservationType) 
+  dplyr::filter(park_name == input$sel_Park & visit_yr >= as.integer(input$sel_YrRange[1]) & visit_yr <= as.integer(input$sel_YrRange[2]) & dpl_label %in% input$sel_ProcessLevel & observation_type %in% input$sel_ObservationType) 
 
   shiny::req(!is.null(temp_subdata))
   shiny::req(nrow(temp_subdata) > 0)
@@ -919,19 +925,38 @@ renderUI({
   temp_summary <- temp_subdata %>%
     dplyr::group_by(park_name, site_name, station_name) %>%
     dplyr::summarize(
-      MinYr = as.integer(min(Yr, na.rm = TRUE)),
-      MaxYr = as.integer(max(Yr, na.rm = TRUE)),
-      TotalSurveyYrs = n_distinct(Yr),
-      NumRecords = n()
-      ) %>%
-    ungroup()
+      MinYr = as.integer(min(visit_yr, na.rm = TRUE)),
+      MaxYr = as.integer(max(visit_yr, na.rm = TRUE)),
+      TotalSurveyYrs = n_distinct(visit_yr),
+      NumRecords = n(),
+      Raw_perc = round(100* sum(dpl_label == "Raw")/NumRecords),
+      Provisional_perc = round(100* sum(dpl_label == "Provisional")/NumRecords),
+      Accepted_perc = round(100* sum(dpl_label == "Accepted")/NumRecords)
+      ) %>% 
+    dplyr::ungroup() %>%
+    droplevels()
 
   temp_summary <- droplevels(temp_summary)
+  shiny::req(!is.null(temp_summary))
+  shiny::req(nrow(temp_summary) > 0)
+  
+  temp_date_summary <- temp_subdata %>%
+    dplyr::group_by(park_name, site_name, station_name, visit_date) %>%
+    dplyr::summarize(
+      NumRecords = n(),
+      Raw_perc = round(100* sum(dpl_label == "Raw")/NumRecords),
+      Provisional_perc = round(100* sum(dpl_label == "Provisional")/NumRecords),
+      Accepted_perc = round(100* sum(dpl_label == "Accepted")/NumRecords)
+      ) %>%
+    dplyr::ungroup() %>%
+    droplevels()
+    
   shiny::req(!is.null(temp_summary))
   shiny::req(nrow(temp_summary) > 0)
 
   rv$SubDataSET <- as.data.frame(temp_subdata)
   rv$SubDataSummary <- as.data.frame(temp_summary)
+  rv$SubDataDateSummary <- as.data.frame(temp_date_summary)
   
   Sys.sleep(0.25) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
   })
@@ -959,7 +984,7 @@ renderUI({
   rv$SubDataSETRaw <- rv$SubDataSET %>%
     dplyr::mutate(station_name = as.character(station_name)) %>%
     dplyr::filter(station_name ==  rv$SubDataSummary[input$out_TableSummary_rows_selected, "station_name"]) %>% # user-selected station
-    dplyr::select(-Yr, -Mnth, -Week, -diff_height_mm, -diff_days, -change_per_year_mm)
+    dplyr::select(-visit_yr, -visit_month, -visit_week, -diff_height_mm, -diff_days, -change_per_year_mm)
   }
   Sys.sleep(0.25) # Need to give it time to update, or will generate warning on dashboard
 })
@@ -1092,14 +1117,16 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
     
     renderUI({
       shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park))
+      # saveRDS(isolate(reactiveValuesToList(input)), paste0("temp_input.RDS"))
+      # saveRDS(isolate(reactiveValuesToList(rv)), paste0("temp_rv.RDS"))<<<
       sliderInput(
         "sel_YrRange",
         label = "Range of years to summarize:", 
-        min = min(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
-        max = max(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
+        min = min(rv$DataSET$visit_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
+        max = max(rv$DataSET$visit_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
         step = 1, 
         sep="", 
-        value = c(min(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), max(rv$DataSET$Yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE)), 
+        value = c(min(rv$DataSET$visit_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), max(rv$DataSET$visit_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE)), 
         dragRange = TRUE, 
         width = "85%")
       }),
@@ -1109,8 +1136,8 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
       checkboxGroupInput(
         "sel_ProcessLevel",
         label = "Include these data processing levels: ",
-          choices = sort(unique(rv$DataSET$DataProcessingLevel)),
-        selected = switch(is.null(input$sel_ProcessLevel)+1, input$sel_ProcessLevel, sort(unique(rv$DataSET$DataProcessingLevel)))
+          choices = sort(unique(rv$DataSET$dpl_label)),
+        selected = switch(is.null(input$sel_ProcessLevel)+1, input$sel_ProcessLevel, sort(unique(rv$DataSET$dpl_label)))
         )
       }),
     
@@ -1119,8 +1146,8 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
       checkboxGroupInput(
         "sel_ObservationType",
         label = "Include these observation types: ",
-        choices = sort(unique(rv$DataSET$ObservationType1)),
-        selected = switch(is.null(input$sel_ObservationType)+1, input$sel_ObservationType, sort(unique(rv$DataSET$ObservationType1)))
+        choices = sort(unique(rv$DataSET$observation_type)),
+        selected = switch(is.null(input$sel_ObservationType)+1, input$sel_ObservationType, sort(unique(rv$DataSET$observation_type)))
         )
       })
   )
@@ -1135,7 +1162,7 @@ Examine Data - Outputs {data-width=100 .tabset .tabset-fade}
 ```{r examine_summary}
 output$out_TableSummary <- DT::renderDT({
   FuncOrderCheck(import = TRUE, examine = TRUE, plot = FALSE)
-  
+
   DT::datatable(
     rv$SubDataSummary,
     filter = "top",
@@ -1281,7 +1308,7 @@ hr()
 renderUI({
   shiny::req(!is.null(rv$MapDat))
   
-  map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$Longitude, na.rm = TRUE), latrange = range(rv$MapDat$Latitude, na.rm = TRUE)))
+  map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$station_longitude, na.rm = TRUE), latrange = range(rv$MapDat$station_latitude, na.rm = TRUE)))
   
   sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = 20, value = map_zoom - 1, step = 0.5, ticks = FALSE, dragRange = FALSE, width = "95%")
 })
@@ -1309,7 +1336,7 @@ renderPlot({
   # hacky legend because plotly heatmaps can't generate horizontal colorbars
   heat_legend <- grid.arrange(ggpubr::as_ggplot(
     get_legend(
-      ggplot(rv$ThreshDataSET, aes(x = visit_date, y = pin_positionB, fill = level)) +
+      ggplot(rv$ThreshDataSET, aes(x = visit_date, y = pin_position, fill = level)) +
         geom_tile() + 
         scale_fill_manual(values = discrete_cols, na.translate = FALSE, drop = FALSE, name = switch((input$sel_CalcUnit == "change_per_year_mm")+1, "Threshold Category (CHANGE SINCE PRIOR):   ", "Threshold Category (CHANGE PER YEAR):  ")) + 
         theme(legend.position = "top",
@@ -1355,8 +1382,8 @@ output$out_ThreshMap <- renderLeaflet({
   discrete_cols = c("#ffd700", "#add8e6", "#ffa500")
   discrete_levels = c("below", "between(inclusive)", "above")
   
-  long_vec <- na.exclude(rv$MapDat$Longitude)
-  lat_vec <- na.exclude(rv$MapDat$Latitude)
+  long_vec <- na.exclude(rv$MapDat$station_longitude)
+  lat_vec <- na.exclude(rv$MapDat$station_latitude)
   map_center <- c(mean(c(min(long_vec), max(long_vec))), mean(c(min(lat_vec), max(lat_vec))))
   
   thresh_map <- leaflet() %>%
@@ -1364,8 +1391,8 @@ output$out_ThreshMap <- renderLeaflet({
     # addPolygons(data = rv$UnitPoly[rv$UnitPoly@data$UNIT_CODE == unique(rv$MapDat$park_code),], layerId = rv$UnitPoly@data$UNIT_CODE, stroke = TRUE, color = "white", weight = 1, opacity = 1, fillOpacity = 0) %>% # park unit outline
     addScaleBar() %>% 
     addMinicharts(
-      lng = rv$MapDat$Longitude,
-      lat = rv$MapDat$Latitude,
+      lng = rv$MapDat$station_longitude,
+      lat = rv$MapDat$station_latitude,
       time = rv$MapDat$visit_date,
       type = "pie",
       transitionTime = 0,
