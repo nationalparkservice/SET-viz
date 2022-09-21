@@ -2496,8 +2496,25 @@ renderPlotly({ # separate validation statements so they are checked in sequence
 })
 ```
 
-Export to NERRs
+Export Data for NERRs
 ====================================== 
+Inputs {.sidebar data-width=250}
+-------------------------------------
+```{r input_NERRs}  
+renderUI({
+  shiny::req(!is.null(rv$DataSET))
+  checkboxGroupInput("sel_export_parks",
+    label = "Include data for these Parks: ",
+    choices = sort(unique(rv$DataSET$park_code)),
+    selected = sort(unique(rv$DataSET$park_code))
+    )
+  })
+    
+downloadLink("button_exportNERRs", label = "Export SET data for NERRs")
+```
+
+Data for NERRs - Outputs
+-------------------------------------
 
 ### Data Formatted for NERRs
 
