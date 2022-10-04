@@ -8,26 +8,9 @@ runtime: shiny
 ---
 
 ```{r global, include=FALSE}
-### PICK UP FROM HERE--DOES NOT CALC THRESH FOR BISCAYNE BISC1. FOR A LOT OF SITES, GET PLOT ERRORS.
-### FIX
-# Add title to leaflet map
-# LM trend line--change it to LMER? (does it matter)
-# Legend element duplicated on highlight (time series)
-# Can i get x-axis label on each heat plot matrix?
-# INclude these data processing levels--if I only choose Accepted and there are no such data, then it should show blank (but doesn't)
 
 ### NOTES
 # Converted all tibbles to data frames to get rid of phantom column name errors
-
-### QUESTIONS
-# Removing records with NA in any of these columns (station_name, event_date_UTC, SET_direction_azimuth, pin_position, pin_height_mm)--any reason to keep those in? Can provide an output of which records were excluded, or just a summary of counts
-
-# How to deal with some pins having base pin height and others not?
-# On heat map page, do you want to be able to select a park or use previously selected park and filters?
-# Will a station always have 4 directions and 9 pins/dxn? (otherwise need to have flexible heat map sizing)
-
-### TO DO
-# Make sure x-axis range consistent across all stations in site
 
 ### NAMING RULES
 # Functions: FuncTest(dat1_there, dat2_here)
@@ -117,15 +100,6 @@ rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataC
 thresh3_cols = c("#ffd700", "#add8e6", "#ffa500")
 thresh3_levels = c("big decline", "within expected range", "big increase")
 
-# out <- readRDS("~/NPS PROJECTS_CURRENT/Dash_SETviz/Data_out/SET_20220907.RDS")
-# for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
-#     if(!is.null(out[i])) {
-#     rv[[i]] <- out[[i]] # load the data in the dashboard
-#     }
-# }
-
-  
-# <<<<<<<<<<<< TESTING ONLY
 ```
 
 ```{r css}
@@ -545,7 +519,7 @@ FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_level
   
  heat_station_list <- lapply(sort(unique(dat2$station_name)), function(i) {
     cat("i = ", i)
-   # incProgress(1/(length(unique(dat$station_name))+3), detail = paste0("...building heat plots for ", i))
+   incProgress(1/(length(unique(dat$station_name))+3), detail = paste0("...building heat plots for ", i))
     # Data for this station
     subdat <- dplyr::filter(dat2, station_name == i) %>%
       droplevels()
