@@ -26,7 +26,7 @@ runtime: shiny
 rm(list=ls())
 
 ### Load libraries -----
-# Will automatically install any libraries it can't find
+# Will automatically install any libraries it can't find (except flexdashboard)
 pkgs <- c("flexdashboard", 
               "shiny", 
               "knitr", 
@@ -62,7 +62,7 @@ pkgs <- c("flexdashboard",
               "RgoogleMaps", # for MaxZoom & MinZoom
               "leaflet.minicharts") # for pie charts in leaflet maps
 installed_pkgs <- pkgs %in% installed.packages()
-if (length(pkgs[!installed_pkgs]) > 0) install.packages(pkgs[!installed_pkgs],dep=TRUE) 
+if (length(pkgs[!installed_pkgs]) > 0) install.packages(pkgs[!installed_pkgs], repos = "https://cloud.r-project.org" , dep=TRUE) 
 lapply(pkgs, library, character.only = TRUE)
 
 options(shiny.maxRequestSize = 20*1024^2, 
@@ -1330,19 +1330,19 @@ observeEvent(eventExpr = input$button_RecalcMH, {
 ```{r page_examine_data}
 
 # Show/hide well panels ----
-# renderUI({
-#   if(!is.null(rv$DataSET)) {
-#     shinyjs::showElement("wp_ExaminePark")
-#     } else {
-#       shinyjs::hideElement("wp_ExaminePark")
-#     }
-# 
-#   if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
-#     shinyjs::showElement("wp_ExamineFilter")
-#     } else {
-#       shinyjs::hideElement("wp_ExamineFilter")
-#     }
-# })
+renderUI({
+  if(!is.null(rv$DataSET)) {
+    shinyjs::showElement("wp_ExaminePark")
+    } else {
+      shinyjs::hideElement("wp_ExaminePark")
+    }
+
+  if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
+    shinyjs::showElement("wp_ExamineFilter")
+    } else {
+      shinyjs::hideElement("wp_ExamineFilter")
+    }
+})
 
 # Filter and summarize data ----
 renderUI({
@@ -1569,7 +1569,7 @@ Inputs {.sidebar data-width=300}
       })
   )
 
-# shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
+shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
   wellPanel(
     id = "wp_ExamineFilter",
     
@@ -1609,7 +1609,7 @@ Inputs {.sidebar data-width=300}
         )
       })
   )
-# )
+)
 ```
 
 Big Picture Summary - Outputs {data-width=100 .tabset .tabset-fade}
@@ -1627,8 +1627,6 @@ Big Picture Summary - Outputs {data-width=100 .tabset .tabset-fade}
 ```{r}
 output$out_TableSummary <- renderReactable({
   cat("line1626")
-saveRDS(isolate(reactiveValuesToList(input)), paste0("TEMP_input.RDS"))
-saveRDS(isolate(reactiveValuesToList(rv)), paste0("TEMP_rv.RDS"))
   FuncOrderCheck(import = TRUE, examine = TRUE)
   cat("line1628")
   reactable(
@@ -2488,7 +2486,7 @@ Data for NERRs - Outputs
 ```{r NERRs}
 
 output$out_NERRs <- DT::renderDT({
-  # FuncOrderCheck(import = TRUE, examine = FALSE)
+  FuncOrderCheck(import = TRUE, examine = FALSE)
   shiny::req(!is.null(rv$DataSET_NERRs))
   temp_NERRs <- DT::datatable(
     rv$DataSET_NERRs,
