@@ -1020,6 +1020,7 @@ observeEvent(eventExpr = input$button_CancelModal, {
 # (Home) Import and format data via SQL database download ----
 observeEvent(eventExpr = input$button_ImportSQL, {
   shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
+  shiny::validate(need(!is.null(input$database_server), message = "Enter a valid SQL Database Server"))
   
   withProgress(message = "Just a moment", value = 0, {
     
@@ -1029,37 +1030,39 @@ observeEvent(eventExpr = input$button_ImportSQL, {
         
         con <- DBI::dbConnect(odbc::odbc(),
                       Driver =  input$database_driver,
-                      Server = "INP2300SQL01\\NTWK",
+                      Server = input$database_server,
                       Trusted_Connection = "Yes")
   dbGetQuery(con, "USE [SET]")
   
   incProgress(1/10, detail = "...getting Marker Horizon data")
   
   marker_horizon_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_marker_horizon_data')
-  # shiny::validate(need(!is.null(marker_horizon_data), message = "Could not import Marker Horizon data"))
+  shiny::validate(need(!is.null(marker_horizon_data), message = "Could not import Marker Horizon data"))
   
   incProgress(1/10, detail = "...getting Pin Group data")
   
   pin_group_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_SET_pin_information')
-  # shiny::validate(need(!is.null(pin_group_data), message = "Could not import Pin Groups data"))
+  shiny::validate(need(!is.null(pin_group_data), message = "Could not import Pin Groups data"))
   
   incProgress(1/10, detail = "...getting Pin data")
   
   pin_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_SET_data_FINAL')
-  # shiny::validate(need(!is.null(pin_data), message = "Could not import Pin data"))
+  shiny::validate(need(!is.null(pin_data), message = "Could not import Pin data"))
   
   incProgress(1/10, detail = "...getting Station data")
   
   station_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_stations')
-  # shiny::validate(need(!is.null(station_data), message = "Could not import Station data"))
+  shiny::validate(need(!is.null(station_data), message = "Could not import Station data"))
   
   incProgress(1/10, detail = "...getting Events data")
   
   event_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_events')
-  # shiny::validate(need(!is.null(event_data), message = "Could not import Event data"))
+  shiny::validate(need(!is.null(event_data), message = "Could not import Event data"))
   
   incProgress(1/10, detail = "...getting CriticalInformation data")
   critical_information_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_critical_information')
+    shiny::validate(need(!is.null(critical_information_data), message = "Could not import Critical Information data"))
+
   
   # Disconnect from the database server to free up resources
   dbDisconnect(con)
@@ -1510,12 +1513,19 @@ This dashboard is an interactive tool for QAQC and visualizing wetland elevation
 
 This option will generate .CSV FILES OF THE SQL VIEWS and also an .RDS FILE to run the dashboard.
 
-1.  Enter your SQL DRIVER.
+1.  Enter your SQL DRIVER and the SQL DATABASE SERVER.
 
 ```{r}
 textInput("database_driver", "Enter your SQL DRIVER: ",
                   placeholder = "e.g., SQL Server",
                   value = "SQL Server"
+                  )
+```
+
+```{r}
+textInput("database_server", "Enter the SQL DATABASE SERVER: ",
+                  placeholder = "",
+                  value = ""
                   )
 ```
 
