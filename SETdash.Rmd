@@ -1524,7 +1524,7 @@ textInput("database_driver", "Enter your SQL DRIVER: ",
 
 ```{r}
 textInput("database_server", "Enter the SQL DATABASE SERVER: ",
-                  placeholder = "",
+                  placeholder = NULL,
                   value = ""
                   )
 ```
