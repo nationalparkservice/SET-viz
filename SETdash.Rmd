@@ -213,9 +213,6 @@ FuncCalcChange <- function(dat) {
   # Returns:
   #   A data frame with an additional column calculating change in pin height since last survey event (observation_type == "Standard". When prior survey is NA, will give NA.
   #
-  # dat$temp_event_date_UTC <- dat$event_date_UTC # need this to calculate DIffDays correctly (skipping the NA dates, but still need event_date_UTC to order the readings correctly)
-  # dat$temp_event_date_UTC[is.na(dat$pin_height_mm)] <- NA
-  
   
   dt1 <- dat %>%
     dplyr::filter(observation_type == "Standard") %>%
@@ -561,7 +558,7 @@ FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_level
     plot_ly(
       data = template, 
       text = text,
-      width = max(350, 52*length(unique(template$event_date_UTC))), 
+      width = max(500, 52*length(unique(template$event_date_UTC))), 
       height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
       showscale = FALSE) %>%
       plotly::add_heatmap(
@@ -750,7 +747,7 @@ FuncPlotlyHeatPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols, d
     plot_ly(
       data = template, 
       text = text,
-      width = max(350, 52*length(unique(template$event_date_UTC))), 
+      width = max(500, 52*length(unique(template$event_date_UTC))), 
       height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
       showscale = FALSE) %>%
       plotly::add_heatmap(
@@ -978,11 +975,13 @@ FuncOrderCheck <- function(import = TRUE, examine = TRUE) {
   # Function to check if data have been imported and filtered
 
   if(import == TRUE) {
+    cat("line978")
     shiny::validate(
       need(!is.null(rv$DataSET), message = "No data available. Please first import SET data (green buttons on 'Home' tab)."))
   }
   
   if(examine == TRUE) {
+    cat("line984")
     shiny::req(!is.null(rv$DataSET))
     shiny::validate(
       need(!is.null(rv$SubDataSET), message = "Please first use the 'Big Picture Summary' tab to choose a subset of data to examine."))
@@ -1021,7 +1020,6 @@ observeEvent(eventExpr = input$button_CancelModal, {
 # (Home) Import and format data via SQL database download ----
 observeEvent(eventExpr = input$button_ImportSQL, {
   shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
-  shiny::validate(need(!is.null(input$database_server), message = "Enter a valid database server"))
   
   withProgress(message = "Just a moment", value = 0, {
     
@@ -1030,8 +1028,8 @@ observeEvent(eventExpr = input$button_ImportSQL, {
          # Build a new connection and connect to the database server
         
         con <- DBI::dbConnect(odbc::odbc(),
-                      Driver =  input$database_driver, #"SQL Server
-                      Server = input$database_server, # "INP2300SQL01\\NTWK"
+                      Driver =  input$database_driver,
+                      Server = "INP2300SQL01\\NTWK",
                       Trusted_Connection = "Yes")
   dbGetQuery(con, "USE [SET]")
   
@@ -1065,11 +1063,6 @@ observeEvent(eventExpr = input$button_ImportSQL, {
   
   # Disconnect from the database server to free up resources
   dbDisconnect(con)
-      # } else {
-      #   renderText({"You did not input a database server"})
-      # }
-  
-    # }) # end of SQL connect
 
     # Save SQL files as .csv 
   incProgress(1/10, detail = "...formatting and saving data files")
@@ -1089,8 +1082,9 @@ observeEvent(eventExpr = input$button_ImportSQL, {
   for(x in dat_vec) {
     # shiny::validate(need(!is.null(x), message = paste0("Cannot find ", x, " data. Please check for SQL import problems.")))
     
-    write.csv(get(x), file = here::here("Data_in", paste0(x, ".csv")), row.names = FALSE)
+    write.csv(get(x), file = here::here("Data_in", paste0(x, ".csv")), row.names = FALSE) # save the raw data
     
+    # ...then read the data back in to format it for an .RDS file
     filepath_string<- Sys.glob(file.path(here::here("Data_in",  paste0(x, ".csv"))))
     temp_dat <- read.csv(filepath_string, na.strings = "NULL", fileEncoding="UTF-8-BOM") # need to add fileEncoding argument so doesn't add junk characters to first column name
     temp_dat[temp_dat == "NA"] <- NA # weird issue where read.csv converts cells to character "NA" instead of empty string NA
@@ -1134,8 +1128,8 @@ observeEvent(eventExpr = input$button_ImportSQL, {
     # Clear things out
     rm(list = dat_vec)
     unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-    
-    rv$DataSET <- as.data.frame(FuncCalcChange(dat = dat_list$pin_data)) # <<<<<<<<<<<<<<<<<< NEED THIS TO BE FASTER. TRY COLLAPSE::SETTRANSFORM, MAYBE ALSO SELECT ONLY NECESSARY COLS
+    cat("line1136")
+    rv$DataSET <- as.data.frame(FuncCalcChange(dat = dat_list$pin_data)) 
     rv$DataStation <- dat_list$station_data
     rv$DataEvent <- dat_list$event_data
     rv$DataCriticalInfo <- dat_list$critical_information_data
@@ -1336,19 +1330,19 @@ observeEvent(eventExpr = input$button_RecalcMH, {
 ```{r page_examine_data}
 
 # Show/hide well panels ----
-renderUI({
-  if(!is.null(rv$DataSET)) {
-    shinyjs::showElement("wp_ExaminePark")
-    } else {
-      shinyjs::hideElement("wp_ExaminePark")
-    }
-
-  if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
-    shinyjs::showElement("wp_ExamineFilter")
-    } else {
-      shinyjs::hideElement("wp_ExamineFilter")
-    }
-})
+# renderUI({
+#   if(!is.null(rv$DataSET)) {
+#     shinyjs::showElement("wp_ExaminePark")
+#     } else {
+#       shinyjs::hideElement("wp_ExaminePark")
+#     }
+# 
+#   if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
+#     shinyjs::showElement("wp_ExamineFilter")
+#     } else {
+#       shinyjs::hideElement("wp_ExamineFilter")
+#     }
+# })
 
 # Filter and summarize data ----
 renderUI({
@@ -1397,7 +1391,7 @@ renderUI({
     dplyr::ungroup() %>%
     droplevels() %>%
     as.data.frame()
-    cat("line1134")
+    
   shiny::req(!is.null(rv$SubDataDateSummary))
   shiny::req(nrow(rv$SubDataDateSummary) > 0)
   
@@ -1423,8 +1417,8 @@ renderUI({
     droplevels() %>%
     as.data.frame()
 
-  shiny::req(!is.null(rv$SubDataSummary))
-  shiny::req(nrow(rv$SubDataSummary) > 0)
+  shiny::req(!is.null(rv$SubDataMarkerSummary))
+  shiny::req(nrow(rv$SubDataMarkerSummary) > 0)
   
   rv$SubDataDateMarkerSummary <- rv$SubDataMarker %>%
     dplyr::group_by(park_name, site_name, station_name, event_date_UTC) %>%
@@ -1442,7 +1436,7 @@ renderUI({
   shiny::req(!is.null(rv$SubDataDateMarkerSummary))
   shiny::req(nrow(rv$SubDataDateMarkerSummary) > 0)
   
-  Sys.sleep(0.5) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
+  # Sys.sleep(0.5) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
   })
 ```
 
@@ -1469,6 +1463,8 @@ renderUI({
 
 renderUI({
   shiny::req(!is.null(input$sel_export_parks), !is.null(rv$DataSET))
+  # saveRDS(isolate(reactiveValuesToList(input)), paste0("TEMP_input.RDS"))
+# saveRDS(isolate(reactiveValuesToList(rv)), paste0("TEMP_rv.RDS"))
   rv$DataSET_NERRs <- FuncFormatSET_NERRs(dat = rv$DataSET)
   Sys.sleep(0.5) # Need to give it time to update, or will generate warning on dashboard
 })
@@ -1514,17 +1510,12 @@ This dashboard is an interactive tool for QAQC and visualizing wetland elevation
 
 This option will generate .CSV FILES OF THE SQL VIEWS and also an .RDS FILE to run the dashboard.
 
-1.  Enter your SQL DRIVER and DATABASE SERVER information.
+1.  Enter your SQL DRIVER.
 
 ```{r}
 textInput("database_driver", "Enter your SQL DRIVER: ",
                   placeholder = "e.g., SQL Server",
                   value = "SQL Server"
-                  )
-
-textInput("database_server", "Enter the DATABASE SERVER: ",
-                  placeholder = "e.g., INP2300SQL01\\NTWK",
-                  value = "INP2300SQL01\\NTWK"
                   )
 ```
 
@@ -1561,10 +1552,9 @@ Column {data-width=10}
 BIG PICTURE SUMMARY
 ====================================== 
 
-Inputs {.sidebar data-width=260}
+Inputs {.sidebar data-width=300}
 -------------------------------------
 ```{r input_examine}  
-shinyjs::hidden( # hide this well panel until !is.null(rv$DataSET)
   wellPanel(
     id = "wp_ExaminePark",
     
@@ -1578,14 +1568,15 @@ shinyjs::hidden( # hide this well panel until !is.null(rv$DataSET)
         )
       })
   )
-)
 
-shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
+# shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
   wellPanel(
     id = "wp_ExamineFilter",
     
     renderUI({
+      cat("line1577")
       shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park))
+      cat("line1578")
       sliderInput(
         "sel_YrRange",
         label = strong("Range of years to summarize:"), 
@@ -1618,7 +1609,7 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
         )
       })
   )
-)
+# )
 ```
 
 Big Picture Summary - Outputs {data-width=100 .tabset .tabset-fade}
@@ -1635,9 +1626,11 @@ Big Picture Summary - Outputs {data-width=100 .tabset .tabset-fade}
 ####
 ```{r}
 output$out_TableSummary <- renderReactable({
-  
+  cat("line1626")
+saveRDS(isolate(reactiveValuesToList(input)), paste0("TEMP_input.RDS"))
+saveRDS(isolate(reactiveValuesToList(rv)), paste0("TEMP_rv.RDS"))
   FuncOrderCheck(import = TRUE, examine = TRUE)
-  
+  cat("line1628")
   reactable(
     rv$SubDataSummary,
     columns = list(
@@ -1728,9 +1721,9 @@ tags$style("#out_TableSummary{height:100vh;overflow-x:scroll;overflow-y:scroll}"
 ####
 ```{r}
 output$out_TableMarkerSummary <- renderReactable({
-  
+  cat("line1719")
   FuncOrderCheck(import = TRUE, examine = TRUE)
-  
+  cat("lne1721")
   reactable(
     rv$SubDataMarkerSummary,
     columns = list(
@@ -2031,7 +2024,6 @@ renderUI({
         )
       })
 
-shinyjs::hidden(
   wellPanel(
     id = "wp_PinHeights",
 
@@ -2060,7 +2052,6 @@ shinyjs::hidden(
         selected = c("event_change_alert"))
    })
   )
-)
 
 ```
 
@@ -2462,9 +2453,6 @@ renderPlotly({ # separate validation statements so they are checked in sequence
   FuncOrderCheck(import = TRUE, examine = TRUE)
   shiny::validate(
       need(!is.null(rv$RawMHHeatPlots), message = "Please first enter data filter criteria for the plots, then click the green 'Update Summaries' button"))
-  
-    saveRDS(isolate(reactiveValuesToList(input)), paste0("TEMP_input.RDS"))
-  saveRDS(isolate(reactiveValuesToList(rv)), paste0("TEMP_rv.RDS"))
 
   rv$RawMHHeatPlots
 })
@@ -2483,7 +2471,7 @@ renderUI({
     selected = sort(unique(rv$DataSET$park_code))
     )
   })
-    
+
 downloadLink("button_exportNERRs", label = "Export SET data for NERRs")
 ```
 
@@ -2500,7 +2488,7 @@ Data for NERRs - Outputs
 ```{r NERRs}
 
 output$out_NERRs <- DT::renderDT({
-  FuncOrderCheck(import = TRUE, examine = FALSE)
+  # FuncOrderCheck(import = TRUE, examine = FALSE)
   shiny::req(!is.null(rv$DataSET_NERRs))
   temp_NERRs <- DT::datatable(
     rv$DataSET_NERRs,
