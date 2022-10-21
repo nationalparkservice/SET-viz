@@ -1021,6 +1021,7 @@ observeEvent(eventExpr = input$button_CancelModal, {
 observeEvent(eventExpr = input$button_ImportSQL, {
   shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
   shiny::validate(need(!is.null(input$database_server), message = "Enter a valid SQL Database Server"))
+  shiny::validate(need(!is.null(input$network_code), message = "Select at least one network"))
   
   withProgress(message = "Just a moment", value = 0, {
     
@@ -1031,36 +1032,46 @@ observeEvent(eventExpr = input$button_ImportSQL, {
         con <- DBI::dbConnect(odbc::odbc(),
                       Driver =  input$database_driver,
                       Server = input$database_server,
-                      Trusted_Connection = "Yes")
-  dbGetQuery(con, "USE [SET]")
+                      Database = "SET",
+                      Trusted_Connection = "Yes",
+                      Port = 1433)
+  # SQL setup
+        DBI::dbGetQuery(con, "SET ANSI_WARNINGS OFF")
+        DBI::dbGetQuery(con, "SET NOCOUNT ON")
   
   incProgress(1/10, detail = "...getting Marker Horizon data")
   
-  marker_horizon_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_marker_horizon_data')
+  marker_horizon_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_marker_horizon_data WHERE [network_code] IN (%s)", network_code)
+marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
   shiny::validate(need(!is.null(marker_horizon_data), message = "Could not import Marker Horizon data"))
   
   incProgress(1/10, detail = "...getting Pin Group data")
   
-  pin_group_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_SET_pin_information')
+  pin_group_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_SET_pin_information WHERE [network_code] IN (%s)", network_code)
+  pin_group_data <- DBI::dbGetQuery(con, pin_group_data_SQL)
   shiny::validate(need(!is.null(pin_group_data), message = "Could not import Pin Groups data"))
   
   incProgress(1/10, detail = "...getting Pin data")
   
-  pin_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_SET_data_FINAL')
+  pin_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_SET_data_FINAL WHERE [network_code] IN (%s)", network_code)
+  pin_data <- DBI::dbGetQuery(con, pin_data_SQL)
   shiny::validate(need(!is.null(pin_data), message = "Could not import Pin data"))
   
   incProgress(1/10, detail = "...getting Station data")
   
-  station_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_stations')
+  station_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_stations WHERE [network_code] IN (%s)", network_code)
+  station_data <- DBI::dbGetQuery(con, station_data_SQL)
   shiny::validate(need(!is.null(station_data), message = "Could not import Station data"))
   
   incProgress(1/10, detail = "...getting Events data")
   
-  event_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_events')
+  event_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_events WHERE [network_code] IN (%s)", network_code)
+  event_data <- DBI::dbGetQuery(con, event_data_SQL)
   shiny::validate(need(!is.null(event_data), message = "Could not import Event data"))
   
   incProgress(1/10, detail = "...getting CriticalInformation data")
-  critical_information_data <- dbGetQuery(con, 'SELECT * FROM ssrs.vw_dbx_critical_information')
+  critical_information_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_critical_information WHERE [network_code] IN (%s)", network_code)
+  critical_information_data <- DBI::dbGetQuery(con, critical_information_data_SQL)
     shiny::validate(need(!is.null(critical_information_data), message = "Could not import Critical Information data"))
 
   
@@ -1085,10 +1096,10 @@ observeEvent(eventExpr = input$button_ImportSQL, {
   for(x in dat_vec) {
     # shiny::validate(need(!is.null(x), message = paste0("Cannot find ", x, " data. Please check for SQL import problems.")))
     
-    write.csv(get(x), file = here::here("Data_in", paste0(x, ".csv")), row.names = FALSE) # save the raw data
+    write.csv(get(x), file = here::here("Data_in", paste0(x, "_dashboard.csv")), row.names = FALSE) # save the raw data (does not include the download date)
     
     # ...then read the data back in to format it for an .RDS file
-    filepath_string<- Sys.glob(file.path(here::here("Data_in",  paste0(x, ".csv"))))
+    filepath_string<- Sys.glob(file.path(here::here("Data_in",  paste0(x, "_dashboard.csv"))))
     temp_dat <- read.csv(filepath_string, na.strings = "NULL", fileEncoding="UTF-8-BOM") # need to add fileEncoding argument so doesn't add junk characters to first column name
     temp_dat[temp_dat == "NA"] <- NA # weird issue where read.csv converts cells to character "NA" instead of empty string NA
     
@@ -1157,13 +1168,13 @@ observeEvent(eventExpr = input$button_ImportSQL, {
     if(!dir.exists(file.path(here::here(), "Data_out"))) {
       dir.create(file.path(here::here(), "Data_out"))} # create a 'Data_out' subfolder if it doesn't exist
     saveRDS(isolate(reactiveValuesToList(rv)), here::here("Data_out", paste0(input$out_prefix, ".RDS")))
-    
-    write_csv(rv$DataSET, here::here("Data_out", paste0(input$out_prefix, "_formatted.csv")))
+    # 
+    # write_csv(rv$DataSET, here::here("Data_out", paste0(input$out_prefix, "_formatted.csv")))
     
     Sys.sleep(0.5)
     showModal(modalDialog(
       title = "Done",
-      HTML("The formatted data have been saved as '", input$out_prefix, ".RDS' (for dashboard use) and as '", input$out_prefix, "_formatted.csv' (to view in Excel, if you wish) in the 'Data_out' folder of the current working directory, ", getwd(), ". The original (raw) tables imported from SQL have been saved as .csv files in the 'Data_in' folder of the current working directory. <br><br>You may now navigate to the BIG PICTURE SUMMARY tab to run Data Check reports.") 
+      HTML("The formatted data have been saved as '", input$out_prefix, ".RDS' (for future dashboard use) in the 'Data_out' folder of the current working directory, ", getwd(), ". The original (raw) tables imported from SQL have been saved as .csv files in the 'Data_in' folder of the current working directory. <br><br>You may now navigate to the BIG PICTURE SUMMARY tab to run Data Check reports.") 
     ))
     
   }) # end of save
@@ -1527,6 +1538,14 @@ textInput("database_server", "Enter the SQL DATABASE SERVER: ",
                   placeholder = NULL,
                   value = ""
                   )
+```
+
+```{r}
+checkboxGroupInput(
+  "network_code",
+  label = strong("Include data from these network(s): "),
+  choices = c("NCBN", "NCRN", "NETN", "SECN", "SFCN"),
+  selected = c("NCBN", "NCRN", "NETN", "SECN", "SFCN"))
 ```
 
 2.  Make sure you are on VPN. Then click the green 'Import/Summarize Data from SQL' button.
