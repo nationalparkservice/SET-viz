@@ -1022,6 +1022,8 @@ observeEvent(eventExpr = input$button_ImportSQL, {
   shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
   shiny::validate(need(!is.null(input$database_server), message = "Enter a valid SQL Database Server"))
   shiny::validate(need(!is.null(input$network_code), message = "Select at least one network"))
+  options(useFancyQuotes = FALSE)
+  network_code <- paste(sQuote(input$network_code), collapse = ",")
   
   withProgress(message = "Just a moment", value = 0, {
     
@@ -1031,7 +1033,7 @@ observeEvent(eventExpr = input$button_ImportSQL, {
         
         con <- DBI::dbConnect(odbc::odbc(),
                       Driver =  input$database_driver,
-                      Server = input$database_server,
+                      Server = "INP2300SQL01\\ntwk",
                       Database = "SET",
                       Trusted_Connection = "Yes",
                       Port = 1433)
