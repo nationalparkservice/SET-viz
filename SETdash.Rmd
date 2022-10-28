@@ -97,8 +97,8 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 
 rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, ThreshDataSET = NULL, ThreshCounts = NULL, sel_PinHeightSite = NULL, RawHeatPlots = NULL, ThreshHeatPlots = NULL, sel_MHSite = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
-thresh3_cols = c("#ffd700", "#add8e6", "#ffa500")
-thresh3_levels = c("big decline", "within expected range", "big increase")
+thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
+thresh3_levels = c("big decline", "within expected range", "big increase", "N/A")
 
 ```
 
@@ -680,12 +680,17 @@ FuncPlotlyHeatPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols, d
   if(heat_metric == "change") {
     dat2 <- dat %>%
     ungroup() %>%
+    # dplyr::filter(!is.na(diff_days)) %>%
     dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, diff_height_mm, diff_days, lower_cutoff, upper_cutoff, level) %>%
     dplyr::arrange(record_ID) %>%
     dplyr::mutate(
       hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction_azimuth, " (", SET_direction, ")"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>LEVEL: ", level, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Record ID: ", record_ID),
       border_color = NA) %>%
     droplevels()
+    
+    dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase", "N/A"))
+    
+    dat2$level[is.na(dat2$level)] <-"N/A" # <<<<<<<<<<<<<
   }
   
   # Calculate total and relative heights
@@ -729,7 +734,7 @@ FuncPlotlyHeatPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols, d
 
     
     txt <- matrix(pull(template, ifelse(heat_metric == "raw", pin_height_mm, diff_height_mm)), nrow=length(unique(template$pin_position)))
-    txt[is.na(txt)] <- " " # convert NA to blank, otherwise it will show as "new text"
+    txt[is.na(txt)] <- "N/A" # convert NA to blank, otherwise it will show as "new text"
     
     # Create discrete color scale
   use_cols <- discrete_cols[which(discrete_levels %in% unique(na.omit(template$level)))]
@@ -738,9 +743,9 @@ FuncPlotlyHeatPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols, d
     temp_seq <- seq(0,1, length.out = length(use_cols)+1)
   rep_seq <- rep(temp_seq[c(-1, -length(temp_seq))], each = 2)
   z = c(temp_seq[1], rep_seq, temp_seq[length(temp_seq)])
-  color_scale <- data.frame(z=z,col=rep(use_cols, each = 2)) # the default color for NA is white
+  color_scale <- data.frame(z=z,col=rep(use_cols, each = 2)) 
   } else {
-    color_scale <- data.frame(z = c(0, 1), col = rep("#ffd700", 2))
+    color_scale <- data.frame(z = c(0, 1), col = rep("#ffffff", 2))# the default color for NA is white
   }
   
   
@@ -1299,6 +1304,8 @@ observeEvent(eventExpr = input$button_RecalcThresholds, {
     # Create pin change heat plots
     shiny::req(!is.null(rv$ThreshDataSET))
 cat("line1040")
+saveRDS(isolate(reactiveValuesToList(input)), paste0("TEMP_input.RDS"))
+saveRDS(isolate(reactiveValuesToList(rv)), paste0("TEMP_rv.RDS"))
     rv$ThreshHeatPlots <- FuncPlotlyHeatPlot(dat = rv$ThreshDataSET, heat_metric = "change")
     cat("988")
     
@@ -1479,8 +1486,7 @@ renderUI({
 
 renderUI({
   shiny::req(!is.null(input$sel_export_parks), !is.null(rv$DataSET))
-  # saveRDS(isolate(reactiveValuesToList(input)), paste0("TEMP_input.RDS"))
-# saveRDS(isolate(reactiveValuesToList(rv)), paste0("TEMP_rv.RDS"))
+
   rv$DataSET_NERRs <- FuncFormatSET_NERRs(dat = rv$DataSET)
   Sys.sleep(0.5) # Need to give it time to update, or will generate warning on dashboard
 })
