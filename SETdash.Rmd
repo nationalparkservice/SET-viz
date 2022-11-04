@@ -101,12 +101,12 @@ thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
 thresh3_levels = c("big decline", "within expected range", "big increase", "N/A")
 
 # >>>>>>>>>>>>>>>>> TESTING
-out <- readRDS("~/NPS PROJECTS_CURRENT/Dash_SETviz/Data_out/SET_20221103_ALL.RDS")
-for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
-    if(!is.null(out[i])) {
-    rv[[i]] <- out[[i]] # load the data in the dashboard
-    }
-  }
+# out <- readRDS("~/NPS PROJECTS_CURRENT/Dash_SETviz/Data_out/SET_20221103_ALL.RDS")
+# for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
+#     if(!is.null(out[i])) {
+#     rv[[i]] <- out[[i]] # load the data in the dashboard
+#     }
+#   }
 
 ```
 
@@ -689,11 +689,15 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
     
     dat2$level[is.na(dat2$level)] <-"N/A" # this is necessary so heatmap will still work even if no data 
 
+     saveRDS(dat2, "dat_long.RDS") # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   # Calculate total and relative heights
   temp_distinct <- dat2 %>% 
     dplyr::select(station_name, SET_direction_azimuth, pin_position) %>%
-    distinct()
-  total_page_ht <- 70 + (30*nrow(temp_distinct)) + (120*length(unique(temp_distinct$station_name)))
+    dplyr::group_by(station_name, SET_direction_azimuth) %>%
+  dplyr::summarize(n_pins = length(unique(pin_position)))
+  
+  total_page_ht <- 64 + nrow(temp_distinct) * (30*mean(temp_distinct$n_pins))
+  
   rel_hts <- (temp_distinct %>% dplyr::count(station_name) %>% pull(n))/nrow(temp_distinct)
   
   heat_station_list <- vector("list", length = length(unique(dat2$station_name))) # each list element is a station
@@ -765,16 +769,17 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
           titlefont=list(size=16, family = "Arial")),
         yaxis = list( # y-axis
           autorange = "reversed",
-          dtick = 1)
+          dtick = 1),
+        margin = c(0, 0, 0.2, 0.2)
         ) %>%
       add_annotations( # these are the cell values -- NOTE: ANNOTATIONS RENDER VERY SLOWLY IN PLOT_LY!!
         x = ~event_date_UTC,
         y = ~as.integer(pin_position),
         align = "center",
-        text = txt, # add the values in the cells 
+        text = txt, # add the values in the cells
         bordercolor = ~border_color,
         borderwidth = 2,
-        showarrow = FALSE) 
+        showarrow = FALSE)
     # %>%
     #   add_annotations( # Pipe Direction subtitle
     #     text = paste0("Pipe Direction ", unique(template$SET_direction_azimuth), " (", template$SET_direction, ")"),
@@ -811,21 +816,21 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
       add_annotations( # Station name as title
         x = 0.01,
         y = 1.02,
-        text = paste0("<br><br>STATION ", i), 
-        showarrow = F, 
+        text = paste0("<br><br>STATION ", i),
+        showarrow = F,
         xref="paper",
         yref="paper",
         xanchor="left",
         yanchor="bottom",
         font=list(size=20, family = "Arial")
         ) %>%
-      layout(
-          margin = list(
-          t=50,
-          b=20,
-          l= 80,
-          r=40)
-        )
+    layout(
+        margin = list(
+        t=50,
+        b=20,
+        l= 80,
+        r=40)
+      )
  }) 
  
  final_heat_plotly <- # put the station plots together
@@ -837,7 +842,8 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
      titleX = TRUE,
      titleY = FALSE,
      heights = rel_hts,
-     which_layout = 1)
+     which_layout = 1,
+    margin = c(0, 0.0, 0.02/length(unique(temp_distinct$station_name)), 0.14/length(unique(temp_distinct$station_name))))
  
   return(final_heat_plotly)
 }
@@ -1268,6 +1274,7 @@ dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
 observeEvent(eventExpr = input$button_RecalcPinHeights, { 
 
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinSite),  !is.null(input$sel_ThresholdType))
+
   withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
     cat("line766")
 
@@ -1299,6 +1306,9 @@ cat("line1040")
 
     incProgress(1/3, detail = paste0("...creating heat plots"))
 
+  #     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+ 
     rv$PinHeatPlots <- FuncPlotlyMatrixPlot(dat = rv$PinHeatDataSET, heat_metric = input$sel_HeatMetric)
     cat("988")
     
@@ -1317,7 +1327,7 @@ cat("line1040")
     rv$MapDat <- rv$ThreshCounts %>%
       dplyr::ungroup() %>%
       dplyr::select(site_name, station_name, event_date_UTC, lower_cutoff, upper_cutoff, level, N) %>%
-      dplyr::filter(event_date_UTC != min(rv$ThreshCounts$event_date_UTC, na.rm = TRUE)) %>% # first survey date is all NA's so omit
+      dplyr::filter(event_date_UTC != min(rv$ThreshCounts$event_date_UTC, na.rm = TRUE)) %>% # First Sampling date is all NA's so omit
       spread(key = level, value = N, drop = FALSE, fill = 0) %>%
       left_join(unique(rv$DataStation[c("park_name", "park_code", "site_name", "station_name", "station_latitude", "station_longitude")]), by = c("site_name", "station_name"))
     # })
@@ -1665,8 +1675,8 @@ output$out_TableSummary <- renderReactable({
       park_name = colDef(show = FALSE),
       site_name = colDef(name = "Site", minWidth = 150, align = "center"),
       station_name = colDef(name = "Station", minWidth = 150, sticky = "left", align = "center"),
-      min_yr = colDef(header = with_tooltip("First Survey", "Earliest year with survey data"), minWidth = 80, align = "center"),
-      max_yr = colDef(header = with_tooltip("Recent Survey", "Most recent year with survey data"), minWidth = 80, align = "center"),
+      min_yr = colDef(header = with_tooltip("First Sampling", "Earliest year with survey data"), minWidth = 80, align = "center"),
+      max_yr = colDef(header = with_tooltip("Last Sampling", "Most recent year with survey data"), minWidth = 80, align = "center"),
       total_survey_yrs = colDef(header = with_tooltip("# of Years", "Number of years with survey data"), minWidth = 80, align = "center"),
       num_records = colDef(name = "# of Records", minWidth = 65, align = "center"),
       raw_perc = colDef(
@@ -1758,8 +1768,8 @@ output$out_TableMarkerSummary <- renderReactable({
       park_name = colDef(show = FALSE),
       site_name = colDef(name = "Site", minWidth = 150, align = "center"),
       station_name = colDef(name = "Station", minWidth = 150, sticky = "left", align = "center"),
-      min_yr = colDef(header = with_tooltip("First Survey", "Earliest year with survey data"), minWidth = 80, align = "center"),
-      max_yr = colDef(header = with_tooltip("Recent Survey", "Most recent year with survey data"), minWidth = 80, align = "center"),
+      min_yr = colDef(header = with_tooltip("First Sampling", "Earliest year with survey data"), minWidth = 80, align = "center"),
+      max_yr = colDef(header = with_tooltip("Last Sampling", "Most recent year with survey data"), minWidth = 80, align = "center"),
       total_survey_yrs = colDef(header = with_tooltip("# of Years", "Number of years with survey data"), minWidth = 80, align = "center"),
       num_records = colDef(name = "# of Records", minWidth = 80, align = "center"),
       raw_validated = colDef(
@@ -2097,13 +2107,13 @@ renderUI({
                       "Has pin flag or notes" = "pin_flag_alert",
                       "Has vegetation notes" = "veg_notes_alert",
                       "Has SET notes" = "SET_notes_alert",
-                      "Has analysis flag or notes (highlight ORANGE)" = "analysis_alert",
+                      "Has analysis flag or notes" = "analysis_alert",
                       "SET reader changed" = "SET_reader_alert", 
                       "SET instrument changed" = "SET_instrument_alert",
                       "Pin collection changed" = "pin_collection_alert",
 
                       "Has event notes" = "event_notes_alert"),
-        selected = c("pin_flag_alert", "SET_notes_alert", "analysis_alert", "SET_instrument_alert", "pin_collection_alert"))
+        selected = c("pin_flag_alert", "SET_notes_alert", "analysis_alert", "SET_instrument_alert", "pin_collection_alert", "event_notes_alert"))
    })
   )
 
@@ -2240,11 +2250,8 @@ renderPlotly({ # separate validation statements so they are checked in sequence
 cat("line1716")
 shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET))
 shiny::validate(need(unique(rv$PinHeatDataSET$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
-withProgress(message = "Almost there", detail = "...rendering heat plots", value = 0, {
-
 
   rv$PinHeatPlots
-})
 })
 ```
 
@@ -2409,8 +2416,6 @@ renderUI({
 output$out_ThreshMap <- renderLeaflet({
   
   FuncOrderCheck(import = TRUE, examine = TRUE)
-  saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-  saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
   shiny::validate(
       need(!is.null(rv$MapDat) & !is.null(input$sel_MapZoom) & !is.null(input$sel_MapPieSize), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
   
@@ -2512,7 +2517,7 @@ Marker Horizon Data - Output {.tabset .tabset-fade}
 
 * Heatmap cells YELLOW for any selected datum-level alerts.
 
-* BLUE boxes are drawn around heatmap cells with selected event-level alerts (e.g., change in marker horizon reader).
+* RED boxes are drawn around heatmap cells with selected event-level alerts (e.g., change in marker horizon reader).
 
 * Hover over cells to see relevant alerts and data notes.
 
@@ -2522,7 +2527,7 @@ renderUI({
     shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET), !is.null(rv$sel_MHSite), !is.null(rv$SubDataSET))
   shiny::req(rv$sel_MHSite %in% unique(rv$SubDataSET$site_name), unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park)
 
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values shown are average marker horizon depth</text></center><br>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values shown are average marker horizon depth per core ID</text></center><br>")) )
   })
 
 renderPlotly({ # separate validation statements so they are checked in sequence
