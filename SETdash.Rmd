@@ -95,10 +95,18 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 
 ```{r startup}
 
-rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinHeightSite = NULL, PinHeatPlots = NULL, sel_MHSite = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
+rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_HeatMetric = NULL, PinHeatPlots = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
 thresh3_levels = c("big decline", "within expected range", "big increase", "N/A")
+
+# >>>>>>>>>>>>>>>>> TESTING
+out <- readRDS("~/NPS PROJECTS_CURRENT/Dash_SETviz/Data_out/SET_20221103_ALL.RDS")
+for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
+    if(!is.null(out[i])) {
+    rv[[i]] <- out[[i]] # load the data in the dashboard
+    }
+  }
 
 ```
 
@@ -251,11 +259,11 @@ FuncCalcPinAlert <- function(dat, event_level_dat) {
   #
   cat("line252")
   dat2 <- dat %>%
-    # dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, pin_height_mm, dpl, dpl_note, pin_flag_code, pin_flag_notes, vegetation_notes, SET_notes, exclude_int_reason_ID, exclude_int_reason, exclude_cumul_reason_ID, exclude_cumul_reason, SET_reader_change, SET_reader_transition, SET_instrument_change, SET_instrument_transition, pin_collection_change, pin_collection_transition) %>%
+    # dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, pin_height_mm, dpl, dpl_note, pin_flag, pin_flag_notes, vegetation_notes, SET_notes, exclude_int_reason_ID, exclude_int_reason, exclude_cumul_reason_ID, exclude_cumul_reason, SET_reader_change, SET_reader_transition, SET_instrument_change, SET_instrument_transition, pin_collection_change, pin_collection_transition) %>%
     dplyr::left_join(event_level_dat, by = c("station_name", "event_date_UTC")) %>%
     dplyr::mutate(
       dpl_alert = if("dpl_alert" %in% input$sel_PinAlerts) {ifelse(dpl != "Accepted", TRUE, FALSE)} else {FALSE},
-      pin_flag_alert = if("pin_flag_alert" %in% input$sel_PinAlerts) {  ifelse(!is.na(pin_flag_code)|!is.na(pin_flag_notes), TRUE, FALSE)} else {FALSE},
+      pin_flag_alert = if("pin_flag_alert" %in% input$sel_PinAlerts) {  ifelse(!is.na(pin_flag)|!is.na(pin_flag_notes), TRUE, FALSE)} else {FALSE},
       veg_notes_alert = if("veg_notes_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(vegetation_notes), TRUE, FALSE)} else {FALSE},
       SET_notes_alert = if("SET_notes_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(SET_notes), TRUE, FALSE)} else {FALSE},
       analysis_alert = if("analysis_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(exclude_int_reason_ID)|!is.na(exclude_int_reason)| !is.na(exclude_cumul_reason_ID)|!is.na(exclude_cumul_reason), TRUE, FALSE)} else {FALSE},
@@ -672,7 +680,7 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
     dat2 <- dat%>%
       ungroup() %>%
     dplyr::arrange(record_ID) %>%
-    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction_azimuth, " (", SET_direction, ")"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag Code: ", pin_flag_code, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
+    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction_azimuth, " (", SET_direction, ")"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
                     dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, diff_height_mm, diff_days, lower_cutoff, upper_cutoff, level, hover_label, border_color) %>%
                     dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]")) %>%
     droplevels()
@@ -973,9 +981,9 @@ FuncOrderCheck <- function(import = TRUE, examine = TRUE) {
     cat("line984")
     shiny::req(!is.null(rv$DataSET))
     shiny::validate(
-      need(!is.null(rv$SubDataSET), message = "Please first use the 'Big Picture Summary' tab to choose a subset of data to examine."))
+      need(!is.null(rv$SubDataSET), message = "Please first use the 'PARK SUMMARY' tab to choose a park and a subset of data to examine."))
     shiny::validate(
-      need(!is.null(rv$SubDataSummary), message = "Please first use the 'Big Picture Summary' tab to choose a subset of data to examine."))
+      need(!is.null(rv$SubDataSummary), message = "Please first use the 'PARK SUMMARY' tab to choose a park and a subset of data to examine."))
   }
 }
 
@@ -1009,7 +1017,7 @@ observeEvent(eventExpr = input$button_CancelModal, {
 # (Home) Import and format data via SQL database download ----
 observeEvent(eventExpr = input$button_ImportSQL, {
   shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
-  shiny::validate(need(!is.null(input$database_server), message = "Enter a valid SQL Database Server"))
+  shiny::validate(need(grepl("SQL", input$database_server), message = "Enter a valid SQL Database Server"))
   shiny::validate(need(!is.null(input$network_code), message = "Select at least one network"))
   options(useFancyQuotes = FALSE)
   network_code <- paste(sQuote(input$network_code), collapse = ",")
@@ -1073,7 +1081,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
   incProgress(1/10, detail = "...formatting and saving data files")
   
   # Class types for data columns
-      factor_cols <- c("datum", "location_datum", "double_read_type", "dpl", "network_code", "network_name", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag_code", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status", "exclude_int_user", "exclude_cumul_user", "reader_name", "core_type", "core_condition", "foot_present", "group_isretired", "marker_horizon_data_collected", "pin_data_collected", "double_read_pin_collected", "category_code", "category_label") # these variables have a relatively small set number of possible values
+      factor_cols <- c("datum", "location_datum", "double_read_type", "dpl", "network_code", "network_name", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status", "exclude_int_user", "exclude_cumul_user", "reader_name", "core_type", "core_condition", "foot_present", "group_isretired", "marker_horizon_data_collected", "pin_data_collected", "double_read_pin_collected", "category_code", "category_label") # these variables have a relatively small set number of possible values
     integer_cols <- c("SET_direction_azimuth", "SET_offset_mm", "pin_length_mm", "station_elev_m", "pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m", "exclude_int_user_ID", "exclude_int_reason_ID", "exclude_cumul_user_ID", "exclude_cumul_reason_ID", "inundation_level_cm", "core_measurement_number", "core_measurement_depth_mm", "pin_position") 
   
   if(!dir.exists(file.path(here::here(), "Data_in"))) {
@@ -1165,7 +1173,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     Sys.sleep(0.5)
     showModal(modalDialog(
       title = "Done",
-      HTML("The formatted data have been saved as '", input$out_prefix, ".RDS' (for future dashboard use) in the 'Data_out' folder of the current working directory, ", getwd(), ". The original (raw) tables imported from SQL have been saved as .csv files in the 'Data_in' folder of the current working directory. <br><br>You may now navigate to the BIG PICTURE SUMMARY tab to run Data Check reports.") 
+      HTML("The formatted data have been saved as '", input$out_prefix, ".RDS' (for future dashboard use) in the 'Data_out' folder of the current working directory, ", getwd(), ". The original (raw) tables imported from SQL have been saved as .csv files in the 'Data_in' folder of the current working directory. <br><br>You may now navigate to the PARK SUMMARY tab to run Data Check reports.") 
     ))
     
   }) # end of save
@@ -1183,8 +1191,16 @@ observeEvent(eventExpr = input$button_LoadRDS, {
 })
 
 observeEvent(eventExpr = input$saved_data_file, {
+  if(!toupper(tools::file_ext(input$saved_data_file$datapath)) %in% c("RDS")) {
+    showModal(modalDialog(
+        title = "Error",
+        "File must have .RDS extension. Please select a different file."
+    ))
+} else {
   tryCatch(out <- readRDS(input$saved_data_file$datapath),
-           error = function(e) print("Cannot import the selected file"))
+           error = function(e) {out <- NULL; print("Cannot import the selected file")})
+  
+  shiny::req(!is.null(out))
   if(class(out)!="list") {
     showModal(modalDialog(
     title = "Error",
@@ -1205,8 +1221,9 @@ observeEvent(eventExpr = input$saved_data_file, {
   Sys.sleep(0.5)
   showModal(modalDialog(
   title = "Done",
-  "You may now navigate to the BIG PICTURE SUMMARY tab to select a Park Unit."
+  "You may now navigate to the PARK SUMMARY tab to select a Park Unit."
   ))
+}
 })
 
 # (Examine) Run data check (dataMaid report) ----
@@ -1250,15 +1267,16 @@ dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
 # (Pin Heights) Update Summaries ----
 observeEvent(eventExpr = input$button_RecalcPinHeights, { 
 
-  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinHeightSite),  !is.null(input$sel_ThresholdType))
+  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinSite),  !is.null(input$sel_ThresholdType))
   withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
     cat("line766")
 
     # Create raw pin heat plots
-    pin_heat_dat <- FuncCalcPinAlert(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_PinHeightSite & observation_type == "Standard"), event_level_dat = dplyr::filter(rv$SubDataEvent, site_name == input$sel_PinHeightSite) %>% dplyr::select(station_name, event_date_UTC, event_notes))
+    pin_heat_dat <- FuncCalcPinAlert(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_PinSite & observation_type == "Standard"), event_level_dat = dplyr::filter(rv$SubDataEvent, site_name == input$sel_PinSite) %>% dplyr::select(station_name, event_date_UTC, event_notes))
 cat("line1034")
     
-    rv$sel_PinHeightSite <- input$sel_PinHeightSite
+    rv$sel_PinSite <- input$sel_PinSite
+    rv$sel_HeatMetric <- input$sel_HeatMetric
     
     cat("line766")
     
@@ -1314,9 +1332,9 @@ observeEvent(eventExpr = input$button_RecalcMH, {
     cat("line766")
 
     # Create MH heat plots
-    MH_heat_dat <- FuncCalcMHAlert(dat = dplyr::filter(rv$SubDataMarker, site_name == input$sel_MHSite))
+    rv$MarkerHeatDataSET <- FuncCalcMHAlert(dat = dplyr::filter(rv$SubDataMarker, site_name == input$sel_MHSite))
 
-    rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = MH_heat_dat, heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
+    rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = rv$MarkerHeatDataSET, heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
     cat("line983")
     
     rv$sel_MHSite <- input$sel_MHSite
@@ -1561,7 +1579,7 @@ actionButton("button_LoadRDS", "Import/Summarize Data from RDS File",
 Column {data-width=10}
 -------------------------------------
 
-BIG PICTURE SUMMARY
+PARK SUMMARY
 ====================================== 
 
 Inputs {.sidebar data-width=300}
@@ -1624,7 +1642,7 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
 )
 ```
 
-Big Picture Summary - Outputs {data-width=100 .tabset .tabset-fade}
+PARK SUMMARY - Outputs {data-width=100 .tabset .tabset-fade}
 -------------------------------------
   
 ### PIN Summary
@@ -1855,8 +1873,11 @@ renderUI({
     rv$SubDataSET %>%
       dplyr::select(-event_date_yr, -event_date_mnth, -event_date_wk, -diff_height_mm, -diff_days, -SET_reader_change, -SET_reader_transition, -SET_instrument_change, -SET_instrument_transition, -pin_collection_change, -pin_collection_transition),
     columns = list(
+      network_code = colDef(minWidth = 130),
       network_name = colDef(minWidth = 180),
       park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
       SET_reader = colDef(minWidth = 150),
       SET_recorder = colDef(minWidth = 150),
       validation_name = colDef(minWidth = 150),
@@ -1895,8 +1916,11 @@ tags$style("#out_TablePin{height:100vh;overflow-x:scroll;overflow-y:scroll}")
       dplyr::filter(
         park_name == input$sel_Park & lubridate::year(event_date_UTC) >= as.integer(input$sel_YrRange[1]) & lubridate::year(event_date_UTC) <= as.integer(input$sel_YrRange[2]) & (dpl %in% input$sel_ProcessLevel)),
     columns = list(
+      network_code = colDef(minWidth = 130),
       network_name = colDef(minWidth = 180),
       park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
       reader_name = colDef(minWidth = 150),
       core_event_notes = colDef(minWidth = 180),
       core_notes = colDef(minWidth = 180)
@@ -1929,8 +1953,11 @@ tags$style("#out_TableMarker{height:100vh;overflow-x:scroll;overflow-y:scroll}")
     rv$SubDataEvent %>%
       dplyr::select(-event_date_yr, -event_date_mnth, -event_date_wk),
     columns = list(
+      network_code = colDef(minWidth = 130),
       network_name = colDef(minWidth = 180),
       park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
       event_notes = colDef(minWidth = 180)
       ),
     resizable = TRUE, 
@@ -1962,8 +1989,11 @@ tags$style("#out_TableEvent{height:100vh;overflow-x:scroll;overflow-y:scroll}")
       dplyr::filter(
         park_name == input$sel_Park & lubridate::year(event_date_UTC) >= as.integer(input$sel_YrRange[1]) & lubridate::year(event_date_UTC) <= as.integer(input$sel_YrRange[2])),
     columns = list(
+      network_code = colDef(minWidth = 130),
       network_name = colDef(minWidth = 180),
       park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
       detail = colDef(minWidth = 180)
       ),
     resizable = TRUE, 
@@ -1995,8 +2025,14 @@ tags$style("#out_TableCI{height:100vh;overflow-x:scroll;overflow-y:scroll}")
       dplyr::filter(
         park_name == input$sel_Park),
     columns = list(
+      network_code = colDef(minWidth = 130),
       network_name = colDef(minWidth = 180),
       park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
+      station_latitude = colDef(minWidth = 180),
+      station_longitude = colDef(minWidth = 180),
+      station_datum = colDef(minWidth = 130),
       station_notes = colDef(minWidth = 180)
       ),
     resizable = TRUE, 
@@ -2018,19 +2054,25 @@ Pin Heights
 
 Inputs {.sidebar data-width=250}
 -------------------------------------
-```{r input_pin_heights} 
-  
+
+```{r input_pin_heights}
 br()
   
 actionButton("button_RecalcPinHeights", "Update Summaries", style="border-color:black; background-color: lightgreen; width:210px; border:0px; margin:0px")
 
+br()
+
+strong(renderText(input$sel_Park))
+strong(renderText(paste(input$sel_YrRange, collapse = "-")))
+
 renderUI({
-  shiny::req(!is.null(rv$SubDataSET))
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$SubDataSET))
+  shiny::req(input$sel_Park == unique(rv$SubDataSET$park_name))
   selectInput(
-    "sel_PinHeightSite",
+    "sel_PinSite",
     label = strong("Select a Site: "),
     choices = sort(unique(rv$SubDataSET$site_name)),
-    selected = switch(is.null(input$sel_PinHeightSite)+1, input$sel_PinHeightSite, sort(unique(rv$SubDataSET$site_name))[1])
+    selected = switch(is.null(input$sel_PinSite)+1, input$sel_PinSite, sort(unique(rv$SubDataSET$site_name))[1])
         )
       })
 
@@ -2052,7 +2094,7 @@ renderUI({
         "sel_PinAlerts",
         label = strong("Add RED BORDER if any of these alerts is true for a data record: "),
           choices = c("DPL is NOT 'Accepted'" = "dpl_alert",
-                      "Has pin flag code or notes" = "pin_flag_alert",
+                      "Has pin flag or notes" = "pin_flag_alert",
                       "Has vegetation notes" = "veg_notes_alert",
                       "Has SET notes" = "SET_notes_alert",
                       "Has analysis flag or notes (highlight ORANGE)" = "analysis_alert",
@@ -2159,9 +2201,10 @@ Pin Heights - Output {.tabset .tabset-fade}
 ```{r heat}
 # Addressed the unequal widths issue by putting legend in same R chunk as the graph
 renderPlot({
-  shiny::req(!is.null(rv$PinHeatDataSET), !is.null(rv$PinHeatPlots))
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$PinHeatPlots))
   
-  # hacky legend because plotly heatmaps can't generate horizontal colorbars
+  if(unique(rv$PinHeatDataSET$park_name)==input$sel_Park) { # plot should turn blank if user has selected another park and this figure has not updated to reflect that change
+   # hacky legend because plotly heatmaps can't generate horizontal colorbars
   heat_legend <- grid.arrange(ggpubr::as_ggplot(
     get_legend(
       ggplot(rv$PinHeatDataSET, aes(x = event_date_UTC, y = pin_position, fill = level)) +
@@ -2174,16 +2217,34 @@ renderPlot({
         )
       )
     )
-  )
+  ) 
+  } else {NULL}
+  
   }, height = 60)
+
+
+renderUI({
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+  cap_text <- switch(rv$sel_HeatMetric,
+                     "raw" = "actual pin heights",
+                     "change" = "CHANGE in pin heights",
+                     "combined" = "CHANGE in pin heights [actual pin heights are shown in brackets]")
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text, "</text></center><br>")) )
+  })
 
 renderPlotly({ # separate validation statements so they are checked in sequence
   FuncOrderCheck(import = TRUE, examine = TRUE)
   shiny::validate(
-      need(!is.null(rv$PinHeatPlots), message = "Please first enter data filter criteria for the plots, then click the green 'Update Summaries' button"))
+      need(!is.null(rv$PinHeatPlots), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
 cat("line1716")
+shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET))
+shiny::validate(need(unique(rv$PinHeatDataSET$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+withProgress(message = "Almost there", detail = "...rendering heat plots", value = 0, {
+
 
   rv$PinHeatPlots
+})
 })
 ```
 
@@ -2200,11 +2261,23 @@ cat("line1716")
 ####
   
 ```{r}
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Trends in actual pin heights</text></center><br>")) )
+  })
+
 renderPlotly({
-  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$sel_PinHeightSite))
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  shiny::validate(
+      need(!is.null(rv$sel_PinSite), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+    
+    shiny::validate(need(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+  
   
   plot_dat <- rv$SubDataSET %>% 
-    dplyr::filter(site_name == rv$sel_PinHeightSite & observation_type == "Standard") %>%
+    dplyr::filter(site_name == rv$sel_PinSite & observation_type == "Standard") %>%
     dplyr::select(station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, pin_flag, pin_flag_notes) %>%
     dplyr::mutate(
       unique_arm = paste0(station_name, "_", SET_direction_azimuth, " (", SET_direction, ")"),
@@ -2224,8 +2297,7 @@ renderPlotly({
     geom_point(size = 0.2, alpha = 0.3, show.legend = FALSE) +
     geom_smooth(data = plot_dat, aes(group = unique_arm, alpha = 1), method = "lm", se = FALSE, show.legend = FALSE) +
     scale_colour_manual(values = cbp1_arm) +
-    labs(title = paste0("(Raw) pin heights for ", rv$sel_PinHeightSite), x = NULL, y = NULL,
-         subtitle = "Thick straight lines show SET arm linear trend") +
+    labs(title = NULL, x = NULL, y = NULL) +
     theme_bw() +
     theme(legend.title=element_blank()) +
     facet_grid(rows = vars(station_name), scales = "free_y")
@@ -2266,10 +2338,18 @@ renderPlotly({
 ####
 ```{r pie_charts}
 # Initially tried renderPlotly, but had problems when percentiles were not initially selected, then later selected
-  
+ 
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>% of Station-Survey data in each pin height change category</text></center><br>")) )
+  })
+
 renderPlot({
   shiny::req(!is.null(rv$PinHeatDataSET), !is.null(rv$PinHeatPlots))
   
+    if(unique(rv$PinHeatDataSET$park_name)==input$sel_Park) { # plot should turn blank if user has selected another park and this figure has not updated to reflect that change
   # hacky legend because plotly heatmaps can't generate horizontal colorbars
   heat_legend <- grid.arrange(ggpubr::as_ggplot(
     get_legend(
@@ -2284,16 +2364,25 @@ renderPlot({
       )
     )
   )
+    } else {
+      NULL
+    }
   }, height = 60)
 
 output$out_PieCharts <- renderPlotly({
   FuncOrderCheck(import = TRUE, examine = TRUE)
-  shiny::req(!is.null(rv$ThreshCounts), !is.null(input$sel_PinHeightSite))
+    shiny::validate(
+      need(!is.null(rv$sel_PinSite), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+    
+  shiny::req(!is.null(rv$ThreshCounts), !is.null(input$sel_PinSite))
   
       shiny::validate(
-      need(!is.null(rv$ThreshCounts), message = "Please first enter data filter criteria for the plots, then click the green 'Update Summaries' button"))
+      need(!is.null(rv$ThreshCounts), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+      
+          shiny::validate(need(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+      
   
-  FuncPlotlyPieMatrix(dat = rv$ThreshCounts, plot_title = paste0(input$sel_PinHeightSite, ": Change in Pin Height from Prior Survey (each row is a Station, each column is a Survey Event)"))
+  FuncPlotlyPieMatrix(dat = rv$ThreshCounts, plot_title = paste0(input$sel_PinSite, ": Change in Pin Height from Prior Survey (each row is a Station, each column is a Survey Event)"))
 })
 
 tags$style("#out_PieCharts{height:100vh;overflow-x:scroll;overflow-y:scroll}")
@@ -2310,11 +2399,23 @@ plotlyOutput('out_PieCharts', height="100%", width = "100%")
 
 ####
 ```{r thresh_map}
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Time lapse map showing % of data in each pin height change category, by Station</text></center><br>")) )
+  })
+
 output$out_ThreshMap <- renderLeaflet({
   
   FuncOrderCheck(import = TRUE, examine = TRUE)
+  saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
   shiny::validate(
-      need(!is.null(rv$MapDat) & !is.null(input$sel_MapZoom) & !is.null(input$sel_MapPieSize), message = "Please first enter data filter criteria for the plots, then click the green 'Update Summaries' button"))
+      need(!is.null(rv$MapDat) & !is.null(input$sel_MapZoom) & !is.null(input$sel_MapPieSize), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+  
+  shiny::req(!is.null(input$sel_Park))
+shiny::validate(need(unique(rv$MapDat$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
   
   long_vec <- na.exclude(rv$MapDat$station_longitude)
   lat_vec <- na.exclude(rv$MapDat$station_latitude)
@@ -2355,6 +2456,11 @@ br()
   
 actionButton("button_RecalcMH", "Update Summaries", style="border-color:black; background-color: lightgreen; width:210px; border:0px; margin:0px")
 
+br()
+
+strong(renderText(input$sel_Park))
+strong(renderText(paste(input$sel_YrRange, collapse = "-")))
+
 renderUI({
   shiny::req(!is.null(rv$SubDataMarker))
   selectInput(
@@ -2385,7 +2491,7 @@ shinyjs::hidden(
       shiny::req(!is.null(rv$DataMarker))
       checkboxInput(
         "sel_MHReaderAlert",
-        label = strong("Add BLUE border if the marker horizon reader has changed"),
+        label = strong("Add RED border if the marker horizon reader has changed"),
         value = TRUE)
    })
   )
@@ -2412,10 +2518,19 @@ Marker Horizon Data - Output {.tabset .tabset-fade}
 
 ####
 ```{r MH_alert_heat}
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET), !is.null(rv$sel_MHSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_MHSite %in% unique(rv$SubDataSET$site_name), unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values shown are average marker horizon depth</text></center><br>")) )
+  })
+
 renderPlotly({ # separate validation statements so they are checked in sequence
   FuncOrderCheck(import = TRUE, examine = TRUE)
   shiny::validate(
-      need(!is.null(rv$RawMHHeatPlots), message = "Please first enter data filter criteria for the plots, then click the green 'Update Summaries' button"))
+      need(!is.null(rv$RawMHHeatPlots), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET))
+shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
 
   rv$RawMHHeatPlots
 })
