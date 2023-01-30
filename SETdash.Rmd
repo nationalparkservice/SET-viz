@@ -100,14 +100,6 @@ rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataC
 thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
 thresh3_levels = c("big decline", "within expected range", "big increase", "N/A")
 
-# >>>>>>>>>>>>>>>>> TESTING
-# out <- readRDS("~/NPS PROJECTS_CURRENT/Dash_SETviz/Data_out/SET_20221103_ALL.RDS")
-# for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
-#     if(!is.null(out[i])) {
-#     rv[[i]] <- out[[i]] # load the data in the dashboard
-#     }
-#   }
-
 ```
 
 ```{r css}
@@ -995,7 +987,7 @@ observeEvent(eventExpr = input$button_ImportSQL, {
         
         con <- DBI::dbConnect(odbc::odbc(),
                       Driver =  input$database_driver,
-                      Server = "INP2300SQL01\\ntwk", #<<<<<<<<<<<<<<<<<<< REMOVE
+                      Server = input$database_server,
                       Database = "SET",
                       Trusted_Connection = "Yes",
                       Port = 1433)
@@ -1133,9 +1125,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     if(!dir.exists(file.path(here::here(), "Data_out"))) {
       dir.create(file.path(here::here(), "Data_out"))} # create a 'Data_out' subfolder if it doesn't exist
     saveRDS(isolate(reactiveValuesToList(rv)), here::here("Data_out", paste0(input$out_prefix, ".RDS")))
-    # 
-    # write_csv(rv$DataSET, here::here("Data_out", paste0(input$out_prefix, "_formatted.csv")))
-    
+
     Sys.sleep(0.5)
     showModal(modalDialog(
       title = "Done",
@@ -1234,8 +1224,8 @@ dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
 observeEvent(eventExpr = input$button_RecalcPinHeights, { 
   
   
-      saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-  saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+  #     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinSite),  !is.null(input$sel_ThresholdType))
 
