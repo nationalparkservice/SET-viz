@@ -259,11 +259,11 @@ FuncCalcPinAlert <- function(dat, event_level_dat) {
   #
   cat("line252")
   dat2 <- dat %>%
-    # dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, pin_height_mm, dpl, dpl_note, pin_flag, pin_flag_notes, vegetation_notes, SET_notes, exclude_int_reason_ID, exclude_int_reason, exclude_cumul_reason_ID, exclude_cumul_reason, SET_reader_change, SET_reader_transition, SET_instrument_change, SET_instrument_transition, pin_collection_change, pin_collection_transition) %>%
+    # dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, observation_type, pin_position, pin_height_mm, dpl, dpl_note, pin_flag_label, pin_flag_notes, vegetation_notes, SET_notes, exclude_int_reason_ID, exclude_int_reason, exclude_cumul_reason_ID, exclude_cumul_reason, SET_reader_change, SET_reader_transition, SET_instrument_change, SET_instrument_transition, pin_collection_change, pin_collection_transition) %>%
     dplyr::left_join(event_level_dat, by = c("station_name", "event_date_UTC")) %>%
     dplyr::mutate(
       dpl_alert = if("dpl_alert" %in% input$sel_PinAlerts) {ifelse(dpl != "Accepted", TRUE, FALSE)} else {FALSE},
-      pin_flag_alert = if("pin_flag_alert" %in% input$sel_PinAlerts) {  ifelse(!is.na(pin_flag)|!is.na(pin_flag_notes), TRUE, FALSE)} else {FALSE},
+      pin_flag_alert = if("pin_flag_alert" %in% input$sel_PinAlerts) {  ifelse(!is.na(pin_flag_label)|!is.na(pin_flag_notes), TRUE, FALSE)} else {FALSE},
       veg_notes_alert = if("veg_notes_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(vegetation_notes), TRUE, FALSE)} else {FALSE},
       SET_notes_alert = if("SET_notes_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(SET_notes), TRUE, FALSE)} else {FALSE},
       analysis_alert = if("analysis_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(exclude_int_reason_ID)|!is.na(exclude_int_reason)| !is.na(exclude_cumul_reason_ID)|!is.na(exclude_cumul_reason), TRUE, FALSE)} else {FALSE},
@@ -333,46 +333,6 @@ FuncCalcThresh <- function(dat) {
   
   dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase"))
   return(dat2)
-}
-
-FuncCalcMH_TEMP <- function(dat) {
-  # Function to calculate MH average
-  #
-  # Args:
-  #   dat:  Marker horizon data frame
-  #
-  # Returns:
-  #   A data frame with additional columns calculating MH average and identifying event changes
-  #
-  dt1 <- dat %>%
-    dplyr::select(park_code, station_name, marker_horizon_name, core_measurement_number, core_measurement_depth_mm, reader_name, event_date_UTC) %>%
-    dplyr::arrange(park_code, station_name, marker_horizon_name, core_measurement_number, event_date_UTC) %>%
-    dplyr::group_by(park_code, station_name, marker_horizon_name, reader_name, event_date_UTC) %>%
-    dplyr::summarize(
-      unique_MH = paste0(station_name, "_", marker_horizon_name),
-      average_MH_depth = mean(core_measurement_depth_mm, na.rm = TRUE),
-      core_number_vec = as.character(I(list(core_measurement_number)))
-    ) %>%
-    dplyr::ungroup() %>%
-    dplyr::distinct() %>%
-    dplyr::mutate(record_ID = row_number())
-
-  dt2 = data.table(dt1 %>% dplyr::select(-record_ID))
-  dt2[, c("reader_name_lag","event_date_UTC_lag", "average_MH_depth_lag",  "core_number_vec_lag") := shift(.SD, 1), by=c("park_code", "station_name", "marker_horizon_name", "unique_MH")]
-  dt3 <- dplyr::bind_cols(dt1["record_ID"], as.data.frame(dt2)) %>%
-    dplyr::select(record_ID, event_date_UTC_lag, average_MH_depth_lag, reader_name_lag, core_number_vec_lag) %>%
-    dplyr::right_join(dt1, by = "record_ID") %>%
-      dplyr::mutate(
-        diff_depth_mm = average_MH_depth - average_MH_depth_lag,
-        diff_days = event_date_UTC - event_date_UTC_lag,
-        reader_change = reader_name!=reader_name_lag,
-        reader_transition = ifelse(reader_change, paste0("[", event_date_UTC_lag, "] ", reader_name_lag, " -->", " [", event_date_UTC, "] ", reader_name), NA),
-        core_number_vec_change = core_number_vec!=core_number_vec_lag,
-        core_number_vec_transition = ifelse(core_number_vec_change, paste0("[", event_date_UTC_lag, "] ", core_number_vec_lag, " -->", " [", event_date_UTC, "] ", core_number_vec), NA)) %>%
-    dplyr::select(-event_date_UTC_lag, -average_MH_depth_lag, -reader_name_lag, -core_number_vec_lag) %>%
-    dplyr::ungroup()
-
-  return(dt3)
 }
 
 FuncCalcMH <- function(dat) {
@@ -680,7 +640,7 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
     dat2 <- dat%>%
       ungroup() %>%
     dplyr::arrange(record_ID) %>%
-    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction_azimuth, " (", SET_direction, ")"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
+    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction_azimuth, " (", SET_direction, ")"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
                     dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, diff_height_mm, diff_days, lower_cutoff, upper_cutoff, level, hover_label, border_color) %>%
                     dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]")) %>%
     droplevels()
@@ -689,7 +649,6 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
     
     dat2$level[is.na(dat2$level)] <-"N/A" # this is necessary so heatmap will still work even if no data 
 
-     saveRDS(dat2, "dat_long.RDS") # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
   # Calculate total and relative heights
   temp_distinct <- dat2 %>% 
     dplyr::select(station_name, SET_direction_azimuth, pin_position) %>%
@@ -704,7 +663,7 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
   
  heat_station_list <- lapply(sort(unique(dat2$station_name)), function(i) {
     cat("i = ", i)
-   incProgress(1/(length(unique(dat$station_name))+3), detail = paste0("...building heat plots for ", i))
+   # incProgress(1/(length(unique(dat$station_name))+3), detail = paste0("...building heat plots for ", i))
     # Data for this station
     subdat <- dplyr::filter(dat2, station_name == i) %>%
       droplevels()
@@ -1036,7 +995,7 @@ observeEvent(eventExpr = input$button_ImportSQL, {
         
         con <- DBI::dbConnect(odbc::odbc(),
                       Driver =  input$database_driver,
-                      Server = "INP2300SQL01\\ntwk",
+                      Server = "INP2300SQL01\\ntwk", #<<<<<<<<<<<<<<<<<<< REMOVE
                       Database = "SET",
                       Trusted_Connection = "Yes",
                       Port = 1433)
@@ -1087,7 +1046,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
   incProgress(1/10, detail = "...formatting and saving data files")
   
   # Class types for data columns
-      factor_cols <- c("datum", "location_datum", "double_read_type", "dpl", "network_code", "network_name", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status", "exclude_int_user", "exclude_cumul_user", "reader_name", "core_type", "core_condition", "foot_present", "group_isretired", "marker_horizon_data_collected", "pin_data_collected", "double_read_pin_collected", "category_code", "category_label") # these variables have a relatively small set number of possible values
+      factor_cols <- c("datum", "location_datum", "station_datum", "double_read_type", "dpl", "DPL", "network_code", "network_name", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag_code", "pin_flag_label", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status", "exclude_int_user", "exclude_cumul_user", "reader_name", "core_type", "core_condition", "foot_present", "group_isretired", "marker_horizon_data_collected", "pin_data_collected", "double_read_pin_collected", "category_code", "category_label") # these variables have a relatively small set number of possible values
     integer_cols <- c("SET_direction_azimuth", "SET_offset_mm", "pin_length_mm", "station_elev_m", "pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m", "exclude_int_user_ID", "exclude_int_reason_ID", "exclude_cumul_user_ID", "exclude_cumul_reason_ID", "inundation_level_cm", "core_measurement_number", "core_measurement_depth_mm", "pin_position") 
   
   if(!dir.exists(file.path(here::here(), "Data_in"))) {
@@ -1100,6 +1059,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     
   for(x in dat_vec) {
     # shiny::validate(need(!is.null(x), message = paste0("Cannot find ", x, " data. Please check for SQL import problems.")))
+    cat(x)
     
     write.csv(get(x), file = here::here("Data_in", paste0(x, "_dashboard.csv")), row.names = FALSE) # save the raw data (does not include the download date)
     
@@ -1131,7 +1091,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     temp_dat %<>%
       dplyr::mutate_at(vars(matches(factor_cols)), as.factor) %>% 
       dplyr::mutate_at(vars(matches(integer_cols)), as.integer) %>%
-      dplyr::mutate_at(vars(matches("_date")), lubridate::as_date, format = "%Y-%m-%d")
+      dplyr::mutate_at(vars(matches("_date")), base::as.Date)
     
     if("event_date_UTC" %in% names(temp_dat)) {
       temp_dat %<>%
@@ -1272,6 +1232,10 @@ dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
 
 # (Pin Heights) Update Summaries ----
 observeEvent(eventExpr = input$button_RecalcPinHeights, { 
+  
+  
+      saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinSite),  !is.null(input$sel_ThresholdType))
 
@@ -1305,10 +1269,7 @@ cat("line1034")
 cat("line1040")
 
     incProgress(1/3, detail = paste0("...creating heat plots"))
-
-  #     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-  # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
- 
+    
     rv$PinHeatPlots <- FuncPlotlyMatrixPlot(dat = rv$PinHeatDataSET, heat_metric = input$sel_HeatMetric)
     cat("988")
     
@@ -1862,7 +1823,7 @@ addResourcePath("working_dir", here::here())
 
 renderUI({
   FuncOrderCheck(import = TRUE, examine = TRUE)
-  shiny::validate(need(rv$ShowDM == TRUE, message = "Select a Park, then click the green 'Run Data Check' button (may take a little time to run)"))
+  shiny::validate(need(rv$ShowDM == TRUE, message = "Select a Park, then click the green 'Run Data Check' button (may take a little time to run; progress bar is below)"))
 
   tags$iframe(src="working_dir/dataMaid.html", width = "100%", height = "90%", overflow = "scroll") # don't use 100% for height because it won't show the whole thing
 })
@@ -2113,7 +2074,7 @@ renderUI({
                       "Pin collection changed" = "pin_collection_alert",
 
                       "Has event notes" = "event_notes_alert"),
-        selected = c("pin_flag_alert", "SET_notes_alert", "analysis_alert", "SET_instrument_alert", "pin_collection_alert", "event_notes_alert"))
+        selected = c("pin_flag_alert", "SET_notes_alert", "analysis_alert", "SET_instrument_alert", "pin_collection_alert"))
    })
   )
 
@@ -2285,11 +2246,11 @@ renderPlotly({
   
   plot_dat <- rv$SubDataSET %>% 
     dplyr::filter(site_name == rv$sel_PinSite & observation_type == "Standard") %>%
-    dplyr::select(station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, pin_flag, pin_flag_notes) %>%
+    dplyr::select(station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, pin_flag_label, pin_flag_notes) %>%
     dplyr::mutate(
       unique_arm = paste0(station_name, "_", SET_direction_azimuth, " (", SET_direction, ")"),
       unique_pin = paste0(station_name, "_", SET_direction_azimuth, " (", SET_direction, ")", pin_position),
-        hover_text = paste0("<span style='font-size:16px; font-weight:bold;'>", unique_arm, "<br>Pin ", pin_position, "</span><br>Date: ", event_date_UTC, "<br>Pin Height(mm): ", pin_height_mm, ifelse(!is.na(pin_flag), paste0("<br>Pin Flag: ", pin_flag, "<br>Pin Flag Notes: ", pin_flag_notes), ""))
+        hover_text = paste0("<span style='font-size:16px; font-weight:bold;'>", unique_arm, "<br>Pin ", pin_position, "</span><br>Date: ", event_date_UTC, "<br>Pin Height(mm): ", pin_height_mm, ifelse(!is.na(pin_flag_label), paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""))
       )
   
   cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "lightpink", "chartreuse", "honeydew2") # Colorblind-friendly palette
