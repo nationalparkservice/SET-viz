@@ -1150,16 +1150,19 @@ observeEvent(eventExpr = input$button_LoadRDS, {
 })
 
 observeEvent(eventExpr = input$saved_data_file, {
+  cat("line1153")
   if(!toupper(tools::file_ext(input$saved_data_file$datapath)) %in% c("RDS")) {
     showModal(modalDialog(
         title = "Error",
         "File must have .RDS extension. Please select a different file."
     ))
 } else {
+  cat("line1160")
   tryCatch(out <- readRDS(input$saved_data_file$datapath),
            error = function(e) {out <- NULL; print("Cannot import the selected file")})
   
   shiny::req(!is.null(out))
+  cat("line1165")
   if(class(out)!="list") {
     showModal(modalDialog(
     title = "Error",
@@ -1169,20 +1172,23 @@ observeEvent(eventExpr = input$saved_data_file, {
     }
   
   shiny::req(!is.null(out))
+  cat("line1175")
   unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-
+cat("line1177"
+)
   for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
     if(!is.null(out[i])) {
     rv[[i]] <- out[[i]] # load the data in the dashboard
     }
   }
-
+cat("line1184")
   Sys.sleep(0.5)
   showModal(modalDialog(
   title = "Done",
   "You may now navigate to the PARK SUMMARY tab to select a Park Unit."
   ))
 }
+  
 })
 
 # (Examine) Run data check (dataMaid report) ----
@@ -1312,7 +1318,9 @@ renderUI({
     } else {
       shinyjs::hideElement("wp_ExaminePark")
     }
+})
 
+renderUI({
   if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
     shinyjs::showElement("wp_ExamineFilter")
     } else {
@@ -1320,11 +1328,27 @@ renderUI({
     }
 })
 
+renderUI({
+  if(!is.null(rv$SubDataSET)) {
+    shinyjs::showElement("wp_Thresholds")
+    } else {
+      shinyjs::hideElement("wp_Thresholds")
+    }
+})
+
+renderUI({
+  if(!is.null(rv$DataSET)) {
+    shinyjs::showElement("wp_NERRs")
+    } else {
+      shinyjs::hideElement("wp_NERRs")
+    }
+})
+
 # Filter and summarize data ----
 renderUI({
  
   shiny::req(!is.null(rv$DataSET), !is.null(rv$DataEvent), !is.null(rv$DataCriticalInfo), !is.null(rv$DataMarker), !is.null(input$sel_Park), !is.null(input$sel_YrRange[1]), !is.null(input$sel_YrRange[2]), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
-       
+       cat("FILTER AND SUMMARIZE")
   # SET data
   rv$SubDataSET <- rv$DataSET %>%
   dplyr::filter(
@@ -1337,7 +1361,7 @@ renderUI({
   rv$SubDataEvent <- rv$DataEvent %>%
     dplyr::filter(
       park_name == input$sel_Park & lubridate::year(event_date_UTC) >= as.integer(input$sel_YrRange[1]) & lubridate::year(event_date_UTC) <= as.integer(input$sel_YrRange[2])) 
-
+cat("CREATE SUBDATASUMMARY")
   rv$SubDataSummary <- rv$SubDataSET %>%
     dplyr::group_by(park_name, site_name, station_name) %>%
     dplyr::summarize(
@@ -1416,27 +1440,7 @@ renderUI({
   })
 ```
 
-```{r page_threshold_plots}
-
-# Show/hide well panels ----
-renderUI({
-  if(!is.null(rv$SubDataSET)) {
-    shinyjs::showElement("wp_Thresholds")
-    } else {
-      shinyjs::hideElement("wp_Thresholds")
-    }
-})
-```
-
 ```{r page_export_NERRs}
-renderUI({
-  if(!is.null(rv$DataSET)) {
-    shinyjs::showElement("wp_NERRs")
-    } else {
-      shinyjs::hideElement("wp_NERRs")
-    }
-})
-
 renderUI({
   shiny::req(!is.null(input$sel_export_parks), !is.null(rv$DataSET))
 
@@ -1559,13 +1563,16 @@ Inputs {.sidebar data-width=300}
       })
   )
 
-shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
+# shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
   wellPanel(
     id = "wp_ExamineFilter",
     
     renderUI({
       cat("line1577")
       shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park))
+      cat("HAVE SEL_PARK")
+            saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
       cat("line1578")
       sliderInput(
         "sel_YrRange",
@@ -1599,7 +1606,7 @@ shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
         )
       })
   )
-)
+# )
 ```
 
 PARK SUMMARY - Outputs {data-width=100 .tabset .tabset-fade}
@@ -1808,7 +1815,7 @@ splitLayout(
 <div style='height:600px; width:95%;'>
 
 ```{r data_check_report}
-addResourcePath("working_dir", here::here())
+shiny::addResourcePath("working_dir", here::here())
 
 renderUI({
   FuncOrderCheck(import = TRUE, examine = TRUE)
@@ -2019,6 +2026,8 @@ Inputs {.sidebar data-width=250}
 br()
   
 actionButton("button_RecalcPinHeights", "Update Summaries", style="border-color:black; background-color: lightgreen; width:210px; border:0px; margin:0px")
+
+br()
 
 br()
 
@@ -2371,9 +2380,6 @@ output$out_ThreshMap <- renderLeaflet({
   
   shiny::req(!is.null(input$sel_Park))
 shiny::validate(need(unique(rv$MapDat$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
-
-  #     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-  # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
   
   long_vec <- na.exclude(rv$MapDat$station_longitude)
   lat_vec <- na.exclude(rv$MapDat$station_latitude)
@@ -2413,6 +2419,8 @@ Inputs {.sidebar data-width=250}
 br()
   
 actionButton("button_RecalcMH", "Update Summaries", style="border-color:black; background-color: lightgreen; width:210px; border:0px; margin:0px")
+
+br()
 
 br()
 
@@ -2499,16 +2507,22 @@ Export Data for NERRs
 Inputs {.sidebar data-width=250}
 -------------------------------------
 ```{r input_NERRs}  
-renderUI({
+wellPanel(
+    id = "wp_NERRs",
+    
+    renderUI({
   shiny::req(!is.null(rv$DataSET))
   checkboxGroupInput("sel_export_parks",
     label = "Include data for these Parks: ",
     choices = sort(unique(rv$DataSET$park_code)),
     selected = sort(unique(rv$DataSET$park_code))
     )
-  })
+  }), 
+  br(),
+  downloadLink("button_exportNERRs", label = "Export SET data for NERRs")
+)
 
-downloadLink("button_exportNERRs", label = "Export SET data for NERRs")
+
 ```
 
 Data for NERRs - Outputs

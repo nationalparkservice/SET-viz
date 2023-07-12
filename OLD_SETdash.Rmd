@@ -1,0 +1,2537 @@
+---
+title: "SET Visualizer"
+output:
+  flexdashboard::flex_dashboard:
+    theme: yeti
+    orientation: columns
+runtime: shiny
+---
+
+```{r global, include=FALSE}
+
+### NOTES
+# Converted all tibbles to data frames to get rid of phantom column name errors
+
+### NAMING RULES
+# Functions: FuncTest(dat1_there, dat2_here)
+# Action buttons: button_PushMe
+# User inputs: sel_SelectMe
+# Lists, data frames, vectors, variables...: station_files_list, station_df, station_vec, here_is_a_variable
+# Data frame cols: df$ColThisOne, df$ColThatOne
+# List elements: list$ElementOne, list$ElementTwo
+# Reactive elements: rv$ThisOne, rv$ThatOne
+# Temporary variables: temp_this_df
+# Well panel id's: wp_FilterParkSite
+
+rm(list=ls())
+
+### Load libraries -----
+# Will automatically install any libraries it can't find (except flexdashboard)
+pkgs <- c("flexdashboard", 
+              "shiny", 
+              "knitr", 
+              "odbc", # pull data from SQL server
+              "scales",
+              "leaflet", 
+              "RgoogleMaps", # for mapzoom
+              "plotly", 
+              "tidyverse", 
+              "plyr", 
+              "readr",
+              "magrittr", 
+              "leaflet.extras", 
+              "lubridate", 
+              "here", 
+              "httr", # use web services
+              "rgdal", # to use readOGR
+              "sp", # transform projections
+              "purrr", # for applying functions to dplyr groups
+              "dataMaid", # for data checks
+              "shinyFiles", # for user to save files in specified location
+              "RColorBrewer", # to display brewer palettes
+              "shinyjs", # for easy functions that use JavaScript
+              "stringr", # to detect text snippets
+              "tmaptools", # for flexible color mapping
+              "reactable",
+              "data.table", # for fast lag calcs
+              "DT", # for interactive tables
+              "zoo", # for year-month and carry-forward NA's for lag
+              "cowplot", # to get legends from plots
+              "crosstalk", # for SharedData
+              "gridExtra", # for arranging plots and adding plot annotations (ggplotly can't do captions or subtitles)
+              "RgoogleMaps", # for MaxZoom & MinZoom
+              "leaflet.minicharts") # for pie charts in leaflet maps
+installed_pkgs <- pkgs %in% installed.packages()
+if (length(pkgs[!installed_pkgs]) > 0) install.packages(pkgs[!installed_pkgs], repos = "https://cloud.r-project.org" , dep=TRUE) 
+lapply(pkgs, library, character.only = TRUE)
+
+options(shiny.maxRequestSize = 20*1024^2, 
+        timeout = 300,
+        stringsAsFactors = FALSE,
+        DT.options = list(
+          hover = TRUE,
+          scrollX = TRUE,
+          scrollY = TRUE,
+          autoWidth = FALSE),
+        # Header width doesn't match body width when this is set to TRUE. To fix, would need to include code to recalculate widths only after a tab is visible. If setting column widths, need to set autoWidth to TRUE
+        dplyr.summarise.inform = FALSE
+)
+
+# dataMaid helper function that needs to be in global - rotate plot, wrap and truncate long labels
+vertLabPlot <- function(x, xlab, main) { 
+  qplot(x = stringr::str_wrap(substring(x, 0, 42), 15), xlab = xlab, main = main) +
+    coord_flip()
+  }
+
+# dataMaid helper function that needs to be in global - visualFunction for character, factor, labelled and logical variables
+vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
+  v <- dataMaid:::escapeRStyle(na.omit(v))
+  thisCall <- call("vertLabPlot", x=v, xlab="", main=vnam)
+  if (doEval) {
+    return(eval(thisCall))
+  } else return(deparse(thisCall))
+}
+```
+
+```{r startup}
+
+rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_HeatMetric = NULL, PinHeatPlots = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
+
+thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
+thresh3_levels = c("big decline", "within expected range", "big increase", "N/A")
+
+```
+
+```{r css}
+# Validation messages are red
+tags$style(".shiny-output-error-validation {
+  font-size:14px;
+  color: #FF0000;
+}") # validation text is in red. Could also add 'font-weight: bold;'
+
+# This allows renderTables to scroll when overflow
+tags$style(".chart-wrapper {
+  overflow-x:scroll;
+  overflow-y:scroll;
+}")
+
+tags$style("table.dataTable tbody th, table.dataTable tbody td input.form-control {
+    padding: 2px 5px; 
+}") # reduce padding in data tables
+
+tag.map.title <- tags$style(HTML("
+  .leaflet-control.map-title { 
+    transform: translate(-50%,20%);
+    position: fixed !important;
+    left: 50%;
+    text-align: center;
+    padding-left: 10px; 
+    padding-right: 10px; 
+    background: rgba(255,255,255,0.75);
+    font-weight: bold;
+    font-size: 28px;
+  }
+")) # add title to leaflet map
+```
+
+```{r functions}
+
+### FUNCTIONS ----
+
+## Reactable Functions
+# Reactable bar chart function 
+bar_chart <- function(label, width = "100%", height = "14px", fill = "#00bfc4", background = NULL) {
+  bar <- div(style = list(background = fill, width = width, height = height))
+  chart <- div(style = list(flexGrow = 1, marginLeft = "6px", background = background), bar)
+  div(style = list(display = "flex", alignItems = "center"), label, chart)
+}
+
+# Reactable tooltip formatting
+with_tooltip <- function(value, tooltip) {
+  tags$abbr(style = "text-decoration: underline; text-decoration-style: dotted; cursor: help", title = tooltip, value)
+}
+
+## Other Functions
+FuncAllNoneButtons <- function(cond, name_all, name_none) {
+  # Function to create 'Select All' and 'Select None' action buttons
+  #
+  # Args:
+  #   cond:  The input ID that needs to be defined for buttons to show (enter as input.XXX rather than as input$XXX)
+  #   name_all:  ID to assign to 'Select All' button
+  #   name_none:  ID to assign to 'Select None' button
+  #
+  conditionalPanel(
+    condition = paste0("typeof ", cond, " !== 'undefined'"),
+    actionButton(name_all, "Select All", style="color:black; display:inline-block; border:1px; padding:4px 12px;"),
+    actionButton(name_none, "Select None", style="color:black; display:inline-block; border:1px; padding:4px 12px;")
+  )
+}
+
+FuncParkBoundaries <- function(park_vec) {
+  # Function to get park unit boundaries from IRMA
+  #
+  # Args:
+  #   park_vec: Vector of 4-letter park codes for which boundaries should be obtained
+  #
+  # Returns:
+  #   A data frame with additional columns classifying survey date by week, month, year
+  
+     unitBoundaryURL <- paste0("https://services1.arcgis.com/fBc8EJBxQRMcHlei/ArcGIS/rest/services/IMD_Units_Generic_areas_of_analysis_(AOAs)_-_IMD_BND_ALL_UNITS_AOA_nad_py_view/FeatureServer/1/query?where=UNITCODE+%3D+%27, park_vec, %27&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&resultType=none&distance=0.0&units=esriSRUnit_Meter&returnGeodetic=false&outFields=*&returnGeometry=true&returnCentroid=false&featureEncoding=esriDefault&multipatchOption=xyFootprint&maxAllowableOffset=&geometryPrecision=&outSR=&defaultSR=&datumTransformation=&applyVCSProjection=false&returnIdsOnly=false&returnUniqueIdsOnly=false&returnCountOnly=false&returnExtentOnly=false&returnQueryGeometry=false&returnDistinctValues=false&cacheHint=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&having=&resultOffset=&resultRecordCount=&returnZ=false&returnM=false&returnExceededLimitFeatures=true&quantizationParameters=&sqlFormat=none&f=pgeojson&token=") # save output as WGS84
+
+     if(httr::http_status(GET(unitBoundaryURL))$category!="Success") { # if not a valid service call or if the web service is down, abort
+       showModal(
+         urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Error retrieving park_name unit boundary data from IRMA. The message from the web service is: `", http_status(GET(unitBoundaryURL))$message, "`.\n\nTo confirm this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads. If an error results, email IRMA support (irma@nps.gov) for assistance."))
+       )
+       }
+
+     shiny::req(httr::http_status(GET(unitBoundaryURL))$category=="Success")
+
+    tempUnitOutput <- "tempUnit.geojson"
+    download.file(unitBoundaryURL, tempUnitOutput) # readOGR geoJSON driver needs dsn to be a local file, so download the file first, then read it
+
+    imported_dat <- tryCatch(rgdal::readOGR(dsn = tempUnitOutput, dropNULLGeometries = FALSE), error=function(e) print("Error retrieving data")) # return error message if problems still arise with downloading from web services
+    if(class(imported_dat)!="SpatialPolygonsDataFrame") {
+       showModal(
+         urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Could not successfully retrieve park_name unit boundary data from IRMA. To see if this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads with boundary information in geojson format. If necessary, email IRMA support (irma@nps.gov) for assistance."))
+       )
+    }
+
+    shiny::req(class(imported_dat)=="SpatialPolygonsDataFrame")
+    imported_dat <- sp::spTransform(imported_dat, sp::CRS("+proj=longlat +datum=WGS84")) # convert to WGS84
+
+    rv$UnitPoly <- imported_dat
+    rm(imported_dat)
+    unlink("tempUnit.geojson")
+}
+
+FuncCalcChange <- function(dat) {
+  # Function to calculate change per year for pin height
+  #
+  # Args:
+  #   dat:  A final pin data frame
+  #
+  # Returns:
+  #   A data frame with an additional column calculating change in pin height since last survey event (observation_type == "Standard". When prior survey is NA, will give NA.
+  #
+  
+  dt1 <- dat %>%
+    dplyr::filter(observation_type == "Standard") %>%
+    dplyr::select(record_ID, park_code, station_name, SET_direction_azimuth, pin_position, event_date_UTC, pin_height_mm, SET_reader, SET_instrument, pin_collection) %>%
+    dplyr::arrange(event_date_UTC)
+  
+  dt2 = data.table(dt1 %>% dplyr::select(-record_ID))
+  dt2[, c("event_date_UTC_lag", "pin_height_mm_lag", "SET_reader_lag", "SET_instrument_lag", "pin_collection_lag") := shift(.SD, 1), by=c("park_code", "station_name", "SET_direction_azimuth", "pin_position")]
+  dt3 <- dplyr::bind_cols(dt1["record_ID"], as.data.frame(dt2)) %>%
+    dplyr::select(record_ID, event_date_UTC_lag, pin_height_mm_lag, SET_reader_lag, SET_instrument_lag, pin_collection_lag) %>%
+    dplyr::right_join(dat, by = "record_ID") %>%
+      dplyr::mutate(
+        diff_height_mm = pin_height_mm - pin_height_mm_lag,
+        diff_days = event_date_UTC - event_date_UTC_lag,
+        SET_reader_change = SET_reader!=SET_reader_lag,
+        SET_reader_transition = ifelse(SET_reader_change, paste0("[", event_date_UTC_lag, "] ", SET_reader_lag, " -->", " [", event_date_UTC, "] ", SET_reader), NA),
+        SET_instrument_change = SET_instrument!=SET_instrument_lag,
+        SET_instrument_transition = ifelse(SET_instrument_change, paste0("[", event_date_UTC_lag, "] ", SET_instrument_lag, " -->", " [", event_date_UTC, "] ", SET_instrument), NA),
+        pin_collection_change = pin_collection!=pin_collection_lag,
+        pin_collection_transition = ifelse(pin_collection_change, paste0("[", event_date_UTC_lag, "] ", pin_collection_lag, " -->", " [", event_date_UTC, "] ", pin_collection), NA),) %>%
+    dplyr::select(-event_date_UTC_lag, -pin_height_mm_lag, - SET_reader_lag, -SET_instrument_lag, -pin_collection_lag) %>%
+    dplyr::ungroup()
+  
+  return(dt3)
+}
+
+FuncCalcPinAlert <- function(dat, event_level_dat) {
+  # Function to classify pin_height_mm by user-specified alert settings
+  #
+  # Args:
+  #   dat:  A filtered SET data frame for the selected site
+  #   event_level_dat: Event and critical information data for the corresponding site and survey date
+  # 
+  # Returns:
+  #   A data frame with an additional columns level for heatmap color-coding
+  #
+  cat("line252")
+  dat2 <- dat %>%
+    # dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, observation_type, pin_position, pin_height_mm, dpl, dpl_note, pin_flag_label, pin_flag_notes, vegetation_notes, SET_notes, exclude_int_reason_ID, exclude_int_reason, exclude_cumul_reason_ID, exclude_cumul_reason, SET_reader_change, SET_reader_transition, SET_instrument_change, SET_instrument_transition, pin_collection_change, pin_collection_transition) %>%
+    dplyr::left_join(event_level_dat, by = c("station_name", "event_date_UTC")) %>%
+    dplyr::mutate(
+      dpl_alert = if("dpl_alert" %in% input$sel_PinAlerts) {ifelse(dpl != "Accepted", TRUE, FALSE)} else {FALSE},
+      pin_flag_alert = if("pin_flag_alert" %in% input$sel_PinAlerts) {  ifelse(!is.na(pin_flag_label)|!is.na(pin_flag_notes), TRUE, FALSE)} else {FALSE},
+      veg_notes_alert = if("veg_notes_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(vegetation_notes), TRUE, FALSE)} else {FALSE},
+      SET_notes_alert = if("SET_notes_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(SET_notes), TRUE, FALSE)} else {FALSE},
+      analysis_alert = if("analysis_alert" %in% input$sel_PinAlerts) { ifelse(!is.na(exclude_int_reason_ID)|!is.na(exclude_int_reason)| !is.na(exclude_cumul_reason_ID)|!is.na(exclude_cumul_reason), TRUE, FALSE)} else {FALSE},
+      SET_reader_alert = if("SET_reader_alert" %in% input$sel_PinAlerts) {ifelse(SET_reader_change==TRUE, TRUE, FALSE)} else {FALSE},
+      SET_instrument_alert = if("SET_instrument_alert" %in% input$sel_PinAlerts) {ifelse(SET_instrument_change==TRUE, TRUE, FALSE)} else {FALSE},
+      pin_collection_alert = if("pin_collection_alert" %in% input$sel_PinAlerts) {ifelse(pin_collection_change==TRUE, TRUE, FALSE)} else {FALSE},
+      event_notes_alert = if("event_notes_alert" %in% input$sel_PinAlerts) {
+        ifelse(!is.na(event_notes), TRUE, FALSE)} else {FALSE}) %>%
+    rowwise() %>%
+    dplyr::mutate(
+      alert_level = any(dpl_alert, pin_flag_alert, veg_notes_alert, SET_notes_alert, analysis_alert, SET_reader_alert, SET_instrument_alert, pin_collection_alert, event_notes_alert), # TRUE if any requested alert is TRUE
+      border_color = ifelse(alert_level, "#FF0000", NA) # colored border for an alert
+      )
+cat("line319")
+  return(dat2)
+}
+
+FuncCalcQuant <- function(dat) {
+  # Function to classify diff_height_mm by user-specified groups and quantiles
+  #
+  # Args:
+  #   dat:  A filtered SET data frame for the selected site
+  #
+  # Returns:
+  #   A data frame with an additional columns classifying diff_height_mm relative to specified quantiles per group
+  #
+  dat <- droplevels(dat)
+
+  dat %<>% dplyr::mutate(
+    GroupingVar = switch(input$sel_QuantileGroup,
+                         "site" = site_name,
+                         "station" = station_name)) 
+  quant_list <- dat %>%
+    dplyr::group_by(GroupingVar) %>%
+  group_map(~ quantile(.x$diff_height_mm, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
+  quant_df <- data.frame(do.call("rbind", quant_list))
+  names(quant_df) <- c("lower_cutoff", "upper_cutoff")
+  quant_df$GroupingVar <- levels(dat$GroupingVar)
+  
+  dat2 <- dat %>%
+    dplyr::left_join(quant_df, by = "GroupingVar")
+  dat2$level <- ifelse(
+      dat2$diff_height_mm < dat2$lower_cutoff, "big decline", ifelse(
+      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "within expected range"))
+  dat2$GroupingVar <- NULL
+  dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase"))
+
+  return(dat2)
+  }
+
+FuncCalcThresh <- function(dat) {
+  # Function to classify diff_height_mm by user-specified numeric thresholds
+  #
+  # Args:
+  #   dat:  A filtered SET data frame for the specified site
+  #
+  # Returns:
+  #   A data frame with an additional column classifying diff_height_mm relative to specified thresholds
+  #
+  dat <- droplevels(dat)
+  dat2 <- dat
+  dat2$lower_cutoff <- input$sel_ThresholdLower
+  dat2$upper_cutoff <- input$sel_ThresholdUpper
+  dat2$level <- ifelse(
+      dat2$diff_height_mm < dat2$lower_cutoff, "big decline", ifelse(
+      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "within expected range"))
+  
+  dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase"))
+  return(dat2)
+}
+
+FuncCalcMH <- function(dat) {
+  # Function to calculate MH change
+  #
+  # Args:
+  #   dat:  Marker horizon data frame
+  #
+  # Returns:
+  #   A data frame with additional columns calculating MH average and identifying event changes
+  #
+  dt1 <- dat %>%
+    dplyr::select(record_ID, park_code, station_name, marker_horizon_name, core_measurement_number, event_date_UTC, core_measurement_depth_mm, reader_name) %>%
+    dplyr::arrange(event_date_UTC)
+    
+  dt2 = data.table(dt1 %>% dplyr::select(-record_ID))
+  dt2[, c("event_date_UTC_lag", "core_measurement_depth_mm_lag", "reader_name_lag") := shift(.SD, 1), by=c("park_code", "station_name", "marker_horizon_name", "core_measurement_number")]
+  dt3 <- dplyr::bind_cols(dt1["record_ID"], as.data.frame(dt2)) %>%
+    dplyr::select(record_ID, event_date_UTC_lag, core_measurement_depth_mm_lag, reader_name_lag) %>%
+    dplyr::right_join(dat, by = "record_ID") %>%
+      dplyr::mutate(
+        diff_depth_mm = core_measurement_depth_mm - core_measurement_depth_mm_lag,
+        diff_days = event_date_UTC - event_date_UTC_lag,
+        reader_change = reader_name!=reader_name_lag,
+        reader_transition = ifelse(reader_change, paste0("[", event_date_UTC_lag, "] ", reader_name_lag, " -->", " [", event_date_UTC, "] ", reader_name), NA)) %>%
+    dplyr::select(-event_date_UTC_lag, -core_measurement_depth_mm_lag, -reader_name_lag) %>%
+    dplyr::ungroup()
+  
+  return(dt3)
+}
+
+FuncCalcMHAlert <- function(dat) {
+  # Function to classify core_measurement_depth_mm by user-specified alert settings
+  #
+  # Args:
+  #   dat:  A filtered MH data frame for the selected site
+  # 
+  # Returns:
+  #   A data frame with an additional columns level for heatmap color-coding
+  #
+  shiny::req(!is.null(input$sel_MHAlerts), !is.null(input$sel_MHReaderAlert))
+      
+  dat2 <- dat %>%
+    dplyr::mutate(
+      dpl_alert = if("dpl_alert" %in% input$sel_MHAlerts) {ifelse(dpl != "Accepted", TRUE, FALSE)} else {FALSE},
+      core_condition_alert = if("core_condition_alert" %in% input$sel_MHAlerts) {ifelse(!core_condition %in% c("Excellent", "Good"), TRUE, FALSE)} else {FALSE},
+      core_notes_alert = if("core_notes_alert" %in% input$sel_MHAlerts) { ifelse(!is.na(core_notes), TRUE, FALSE)} else {FALSE},
+      core_event_notes_alert = if("core_event_notes_alert" %in% input$sel_MHAlerts) {ifelse(!is.na(core_event_notes), TRUE, FALSE)} else {FALSE},
+      reader_change_alert = if(input$sel_MHReaderAlert) {
+        ifelse(reader_change==TRUE, TRUE, FALSE)} else {FALSE},
+      border_color = ifelse(reader_change_alert==TRUE, "#FF0000", NA), # colored border for reader change alert
+      level = case_when(
+        dpl_alert|core_condition_alert|core_notes_alert|core_event_notes_alert ~ "MH_alert",
+        TRUE ~ "no_alert") # Cell color is yellow if any alert 
+      )
+cat("line319")
+  return(dat2)
+}
+
+FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess = TRUE, rotate_x = FALSE) {
+  # Function to generate scatterplot of data
+  #
+  # Args:
+  #   dat:  A data frame with the raw data
+  #   x_nam: Column name for x-axis variable
+  #   trans_y: Transformation to apply to y axis
+  #   add_loess:  Add loess smooth? (will be biased by censored data)
+  #   rotate_x: should x-axis labels be rotated?
+  #
+  # Returns:
+  #   List of scatterplot
+  # 
+  
+  shiny::req(sum(!is.na(dat$pin_height_mm)) > 0) # make sure there are data
+  
+  if(x_nam == "event_date_UTC") {
+    xaxes_min = min(dat$event_date_UTC, na.rm = TRUE)
+    xaxes_max = max(dat$event_date_UTC, na.rm = TRUE)
+  }
+  
+  yaxes_min = min(dat$pin_height_mm, na.rm = TRUE)
+  yaxes_max = max(dat$pin_height_mm, na.rm = TRUE)
+  
+  # Create the plot(s)
+    
+    p_points <- ggplot(data = dat, aes(x = event_date_wk, y = pin_height_mm, text = paste0("Site: ", site_name, "<br>Station: ", station_name, "<br>Visit Date: ", event_date_UTC, "<br>X-value: ", event_date_wk, "<br>Y-value: ", pin_height_mm))) +
+      geom_jitter(aes(fill = event_date_yr, color = event_date_yr), size = 2, alpha = 0.5, show.legend = c(fill = TRUE, color = FALSE, shape = FALSE))
+  
+    # Create a pretty x-axis
+    if(x_nam == "event_date_UTC") {
+      p1_points <- p_points + scale_x_date(date_breaks = "1 year", date_labels = "%Y", limits = c(xaxes_min, xaxes_max))
+    } else {
+      p1_points <- p_points + scale_x_discrete(breaks = levels(dat$event_date_wk), drop = FALSE)
+    }
+    
+    # If adding loess smooth...
+    # if(add_loess) {
+      p1_points <- p1_points + geom_smooth(data = dat, aes(x = event_date_wk, y = pin_height_mm), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
+      # }
+    
+    # Final formatting of plots
+    p1_points <- p1_points +
+      scale_y_continuous(trans = trans_y, labels = function(x) as.character(round(x,1)), breaks = pretty_breaks(), limits = c(yaxes_min, yaxes_max)) + # alternatively, can use 'coord_cartesian(ylim = c(axes_min, axes_max))' to zoom in to the limits rather than "cutting off" the limits, as setting limits within scale_y_continuous() would do 
+      theme_bw(base_size = 11) +
+      {if(rotate_x) {theme(axis.text.x = element_text(angle = 60, hjust = 1))}} +
+      theme(axis.title.x = element_blank(),
+            axis.title.y = element_blank(),
+            legend.position = "top",
+            legend.text = element_text(size = 16),
+            legend.title = element_text(size = 16)) +
+      facet_wrap(. ~ station_name, drop = TRUE, ncol = 1) # add the name as facet label
+    out_plotly <- ggplotly(
+      p1_points,
+      height = 400*length(unique(dat$station_name))) # THIS IS NOT WORKING--CAN'T SCROLL DOWN
+    
+  return(out_plotly)
+}
+
+FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_levels) {
+  # Function to create plotly heatmaps of raw MH data
+  #
+  # Args:
+  #   dat:  A filtered MH data frame with raw depth data for a single site
+  #   heat_metric: "raw" for raw MH data, or "change" for change in AVERAGE MH depth since last survey <<<<<<<<<<<<<<<<<<<<<
+  #   discrete_cols: For discrete fill, the vector of colors
+  #   discrete_levels: For discrete fill, the levels corresponding with colors
+  #   
+  # Returns:
+  #   GGplot heat map
+  #
+    if(heat_metric == "raw") {
+    dat2 <- dat%>%
+      ungroup() %>%
+    dplyr::arrange(record_ID) %>%
+    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "MH Name: ", marker_horizon_name, "</span><br>Core #: ", core_measurement_number, "<br>Visit Date: ", event_date_UTC, "<br>Core Depth (mm): ", core_measurement_depth_mm, "<br>Record ID: ", record_ID, ifelse((level=="MH_alert")|reader_change_alert, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(core_condition_alert, paste0("<br>Core Condition: ", core_condition), ""), ifelse(core_notes_alert,  paste0("<br>Core Notes: ", core_notes), ""), ifelse(core_event_notes_alert, paste0("<br>Core Event Notes: ", core_event_notes), ""), ifelse(reader_change_alert, paste0("<br>MH Reader Change: ", reader_transition), ""))
+    )
+    }
+  
+  # Calculate total and relative heights
+  temp_distinct <- dat2 %>% 
+    dplyr::select(station_name, marker_horizon_name, core_measurement_number) %>%
+    distinct()
+  total_page_ht <- 70 + (30*nrow(temp_distinct)) + (120*length(unique(temp_distinct$station_name)))
+
+  rel_hts <- (120+((temp_distinct %>% dplyr::count(station_name) %>% pull(n))*30))/(total_page_ht-70)
+  
+  heat_station_list <- vector("list", length = length(unique(dat2$station_name))) # each list element is a station
+  
+ heat_station_list <- lapply(sort(unique(dat2$station_name)), function(i) {
+    cat("i = ", i)
+   incProgress(1/(length(unique(dat$station_name))+3), detail = paste0("...building heat plots for ", i))
+    # Data for this station
+    subdat <- dplyr::filter(dat2, station_name == i) %>%
+      droplevels()
+
+    # MH for this station
+    MH_list <- vector("list", length = length(unique(subdat$marker_horizon_name)))
+    MH_list <- lapply(sort(unique(subdat$marker_horizon_name)), function(j) { # subplot the pipe directions for a station
+      cat("j = ", j, " // ")
+      
+      subdat_MH <- dplyr::filter(subdat, marker_horizon_name == j)
+
+    # create number matrix to put values in the heatmap cells
+    template <- subdat_MH %>%
+      dplyr::select(core_measurement_number, event_date_UTC) %>%
+      expand(core_measurement_number, event_date_UTC)
+    if(heat_metric == "raw") {
+      template %<>%
+        left_join(subdat_MH[c("marker_horizon_name", "core_measurement_number", "event_date_UTC", "core_measurement_depth_mm", "hover_label", "level", "border_color")], by = c("core_measurement_number", "event_date_UTC")) %>%
+      dplyr::arrange(event_date_UTC, core_measurement_number)
+        
+    }
+    
+    txt <- matrix(pull(template, core_measurement_depth_mm), nrow=length(unique(template$core_measurement_number)))
+    txt[is.na(txt)] <- " " # convert NA to blank, otherwise it will show as "new text"
+    
+    # Create discrete color scale
+  use_cols <- discrete_cols[which(discrete_levels %in% unique(na.omit(template$level)))]
+  
+  if(length(use_cols) > 0) {
+    temp_seq <- seq(0,1, length.out = length(use_cols)+1)
+  rep_seq <- rep(temp_seq[c(-1, -length(temp_seq))], each = 2)
+  z = c(temp_seq[1], rep_seq, temp_seq[length(temp_seq)])
+  color_scale <- data.frame(z=z,col=rep(use_cols, each = 2)) # the default color for NA is white
+  } else {
+    color_scale <- data.frame(z = c(0, 1), col = rep("#ffd700", 2))
+  }
+  
+  
+    plot_ly(
+      data = template, 
+      text = text,
+      width = max(500, 52*length(unique(template$event_date_UTC))), 
+      height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
+      showscale = FALSE) %>%
+      plotly::add_heatmap(
+        x = ~as.factor(event_date_UTC),
+        y = ~as.integer(core_measurement_number),
+        text = ~hover_label, # hover information
+        hoverinfo ="text",
+        z = ~as.numeric(factor(level, ordered = T, levels = discrete_levels)), # assign discrete colors to the cells
+        colorscale = color_scale, 
+        xgap = 0.5, # spacing between heatmap cells
+        ygap = 0.5
+        ) %>% 
+      layout(
+        hoverlabel = list(align = "left"),
+        xaxis = list( # x-axis
+          title = "Survey Date", # not enough space before next subplot. <br> does not work
+          tickangle = 270,
+          titlefont=list(size=16, family = "Arial")),
+        yaxis = list( # y-axis
+          autorange = "reversed",
+          dtick = 1)
+        ) %>%
+      add_annotations( # these are the cell values -- NOTE: ANNOTATIONS RENDER VERY SLOWLY IN PLOT_LY!!
+        x = ~event_date_UTC,
+        y = ~as.integer(core_measurement_number),
+        align = "center",
+        text = txt, # add the values in the cells 
+        bordercolor = ~border_color,
+        borderwidth = 2,
+        showarrow = FALSE) 
+    # %>%
+    #   add_annotations( # MH subtitle
+    #     text = paste0("Marker Horizon ", unique( template$marker_horizon_name)),
+    #     xref = "paper",
+    #     yref = "paper",
+    #     x = 0.5,
+    #     y = 1.02,
+    #     xanchor = "center",
+    #     yanchor = "bottom", # y anchor uses 'middle', x anchor uses 'center'
+    #     showarrow = FALSE,
+    #     font=list(size=16, family = "Arial")
+    #     )
+    })
+    
+    plotly::subplot(
+        MH_list,
+        nrows = length(MH_list),
+        shareX = TRUE,
+        shareY = FALSE,
+        titleX = TRUE,
+        titleY = FALSE
+        ) %>%
+        add_annotations( # shared y-axis title
+          x = -0.05,
+          y = 0.55,
+          text = "Core #",
+          showarrow = F,
+          xref="paper",
+          yref="paper",
+          xanchor="right",
+          yanchor="middle", # y anchor uses 'middle', x anchor uses 'center'
+          textangle=-90,
+          font=list(size=16, family = "Arial")) %>%
+      add_annotations( # Station name as title
+        x = 0.01,
+        y = 1.01,
+        text = paste0("STATION ", i), 
+        showarrow = F, 
+        xref="paper",
+        yref="paper",
+        xanchor="left",
+        yanchor="bottom",
+        font=list(size=20, family = "Arial")
+        ) %>%
+      layout(
+          margin = list(
+          t=30,
+          b=0,
+          l= 80,
+          r=40)
+        )
+ }) 
+ 
+ final_heat_plotly <- # put the station plots together
+   plotly::subplot( # setting margin to increase spacing btwn subplots still has the same problem of inner plots being differently sized--this is a known issue since 2016
+     heat_station_list,
+     nrows = length(heat_station_list),
+     shareX = FALSE,
+     shareY = FALSE,
+     titleX = TRUE,
+     titleY = FALSE,
+     heights = rel_hts,
+     margin = 0.04,
+     which_layout = 1)
+ final_heat_plotly
+  return(final_heat_plotly)
+}
+
+FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols, discrete_levels = thresh3_levels) {
+  # Function to create plotly heatmaps of raw pin data or diff_height_mm, organized by station. Using plot_ly because ggplotly is too slow for interactive heat plots b/c it doesn't recognize the input as a heatmap and creates a scatterplot where each rectangle is drawn separately with all the necessary attributes. 
+  #
+  # Args:
+  #   dat:  A filtered SET data frame with raw pin data/change quantile/change threshold classification for a single site
+  #   heat_metric: "raw" for raw pin data, "change" for change in pin height since last survey, or "combined" for both pieces of information
+  #   discrete_cols: For discrete fill, the vector of colors
+  #   discrete_levels: For discrete fill, the levels corresponding with colors
+  #   
+  # Returns:
+  #   Plotly heat map
+  #
+    
+    dat2 <- dat%>%
+      ungroup() %>%
+    dplyr::arrange(record_ID) %>%
+    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction_azimuth, " (", SET_direction, ")"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", diff_height_mm, "<br>Days Diff: ", diff_days, "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
+                    dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, diff_height_mm, diff_days, lower_cutoff, upper_cutoff, level, hover_label, border_color) %>%
+                    dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]")) %>%
+    droplevels()
+    
+    dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase", "N/A"))
+    
+    dat2$level[is.na(dat2$level)] <-"N/A" # this is necessary so heatmap will still work even if no data 
+
+  # Calculate total and relative heights
+  temp_distinct <- dat2 %>% 
+    dplyr::select(station_name, SET_direction_azimuth, pin_position) %>%
+    dplyr::group_by(station_name, SET_direction_azimuth) %>%
+  dplyr::summarize(n_pins = length(unique(pin_position)))
+  
+  total_page_ht <- 64 + nrow(temp_distinct) * (30*mean(temp_distinct$n_pins))
+  
+  rel_hts <- (temp_distinct %>% dplyr::count(station_name) %>% pull(n))/nrow(temp_distinct)
+  
+  heat_station_list <- vector("list", length = length(unique(dat2$station_name))) # each list element is a station
+  
+ heat_station_list <- lapply(sort(unique(dat2$station_name)), function(i) {
+    cat("i = ", i)
+   # incProgress(1/(length(unique(dat$station_name))+3), detail = paste0("...building heat plots for ", i))
+    # Data for this station
+    subdat <- dplyr::filter(dat2, station_name == i) %>%
+      droplevels()
+
+    # Pipe directions for this station
+    pipe_dxn_list <- vector("list", length = length(unique(subdat$SET_direction_azimuth)))
+    pipe_dxn_list <- lapply(sort(unique(subdat$SET_direction_azimuth)), function(j) { # subplot the pipe directions for a station
+      cat("j = ", j, " // ")
+      
+      subdat_pipe <- dplyr::filter(subdat, SET_direction_azimuth == j)
+
+    # create number matrix to put values in the heatmap cells
+      template <- subdat_pipe %>%
+      dplyr::select(pin_position, event_date_UTC) %>%
+      expand(pin_position, event_date_UTC) %>%
+        left_join(subdat_pipe[c("SET_direction_azimuth", "SET_direction", "pin_position", "event_date_UTC", "pin_height_mm", "diff_height_mm", "combined_change_height", "hover_label", "level", "border_color")], by = c("pin_position", "event_date_UTC")) %>%
+      dplyr::arrange(event_date_UTC, pin_position)
+
+    
+    txt <- matrix(pull(template, 
+                       switch(heat_metric,
+                              "raw" = pin_height_mm, 
+                              "change" = diff_height_mm,
+                              "combined" = combined_change_height)),
+                  nrow=length(unique(template$pin_position)))
+    txt[is.na(txt)] <- "N/A" # convert NA to blank, otherwise it will show as "new text"
+    
+    # Create discrete color scale
+  use_cols <- discrete_cols[which(discrete_levels %in% unique(na.omit(template$level)))]
+  
+  if(length(use_cols) > 0) {
+    temp_seq <- seq(0,1, length.out = length(use_cols)+1)
+  rep_seq <- rep(temp_seq[c(-1, -length(temp_seq))], each = 2)
+  z = c(temp_seq[1], rep_seq, temp_seq[length(temp_seq)])
+  color_scale <- data.frame(z=z,col=rep(use_cols, each = 2)) 
+  } else {
+    color_scale <- data.frame(z = c(0, 1), col = rep("#ffffff", 2))# the default color for NA is white
+  }
+  
+  
+    plot_ly(
+      data = template, 
+      text = text,
+      width = max(800, ifelse(heat_metric == "combined", 100*length(unique(template$event_date_UTC)), 52*length(unique(template$event_date_UTC)))),
+      height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
+      showscale = FALSE) %>%
+      plotly::add_heatmap(
+        x = ~as.factor(event_date_UTC),
+        y = ~as.integer(pin_position),
+        text = ~hover_label, # hover information
+        hoverinfo ="text",
+        z = ~as.numeric(factor(level, ordered = T, levels = discrete_levels)), # assign discrete colors to the cells
+        colorscale = color_scale, 
+        xgap = 0.5, # spacing between heatmap cells
+        ygap = 0.5
+        ) %>% 
+      layout(
+        hoverlabel = list(align = "left"),
+        xaxis = list( # x-axis
+          title = "Survey Date", # not enough space before next subplot. <br> does not work
+          tickangle = 270,
+          titlefont=list(size=16, family = "Arial")),
+        yaxis = list( # y-axis
+          autorange = "reversed",
+          dtick = 1),
+        margin = c(0, 0, 0.2, 0.2)
+        ) %>%
+      add_annotations( # these are the cell values -- NOTE: ANNOTATIONS RENDER VERY SLOWLY IN PLOT_LY!!
+        x = ~event_date_UTC,
+        y = ~as.integer(pin_position),
+        align = "center",
+        text = txt, # add the values in the cells
+        bordercolor = ~border_color,
+        borderwidth = 2,
+        showarrow = FALSE)
+    # %>%
+    #   add_annotations( # Pipe Direction subtitle
+    #     text = paste0("Pipe Direction ", unique(template$SET_direction_azimuth), " (", template$SET_direction, ")"),
+    #     xref = "paper",
+    #     yref = "paper",
+    #     x = 0.5,
+    #     y = 1.02,
+    #     xanchor = "center",
+    #     yanchor = "bottom", # y anchor uses 'middle', x anchor uses 'center'
+    #     showarrow = FALSE,
+    #     font=list(size=16, family = "Arial")
+    #     )
+    })
+    
+    plotly::subplot(
+        pipe_dxn_list,
+        nrows = length(pipe_dxn_list),
+        shareX = TRUE,
+        shareY = FALSE,
+        titleX = TRUE,
+        titleY = FALSE
+        ) %>%
+        add_annotations( # shared y-axis title
+          x = -0.05,
+          y = 0.55,
+          text = "Pin Position",
+          showarrow = F,
+          xref="paper",
+          yref="paper",
+          xanchor="right",
+          yanchor="middle", # y anchor uses 'middle', x anchor uses 'center'
+          textangle=-90,
+          font=list(size=16, family = "Arial")) %>%
+      add_annotations( # Station name as title
+        x = 0.01,
+        y = 1.02,
+        text = paste0("<br><br>STATION ", i),
+        showarrow = F,
+        xref="paper",
+        yref="paper",
+        xanchor="left",
+        yanchor="bottom",
+        font=list(size=20, family = "Arial")
+        ) %>%
+    layout(
+        margin = list(
+        t=50,
+        b=20,
+        l= 80,
+        r=40)
+      )
+ }) 
+ 
+ final_heat_plotly <- # put the station plots together
+   plotly::subplot( # setting margin to increase spacing btwn subplots still has the same problem of inner plots being differently sized--this is a known issue since 2016
+     heat_station_list,
+     nrows = length(heat_station_list),
+     shareX = FALSE,
+     shareY = FALSE,
+     titleX = TRUE,
+     titleY = FALSE,
+     heights = rel_hts,
+     which_layout = 1,
+    margin = c(0, 0.0, 0.02/length(unique(temp_distinct$station_name)), 0.14/length(unique(temp_distinct$station_name))))
+ 
+  return(final_heat_plotly)
+}
+
+FuncPlotlyPieMatrix <- function(dat, discrete_cols = thresh3_cols, discrete_levels = thresh3_levels, plot_title) {
+  # Function to create plotly pie chart matrix of pin_height_diff, organized by user-selected grouping. 
+  #
+  # Args:
+  #   dat:  A filtered SET data frame with quantile/threshold classification for a single site
+  #   discrete_cols: For discrete fill, the vector of colors
+  #   discrete_levels: For discrete fill, the levels corresponding with colors
+  #   plot_title: Title for plot page
+  #   
+  # Returns:
+  #   Page of plotly pie charts
+  #
+  stations_vec <- sort(unique(dat$station_name))
+  date_vec <- sort(unique(dat$event_date_UTC))
+  width_px <- 200 + 150 * length(date_vec) # this is the plot width (paper)
+  height_px <- 200 + (150 * length(stations_vec)) # this is the plot height (paper)
+  
+  fig <- plot_ly(
+    textfont = list(size = 25, color = "white"),
+    width = width_px,
+    height = height_px,
+  )
+  m <- list(
+    l = 160,
+    r = 40,
+    b = 100,
+    t = 100,
+    pad = 0
+  )
+  
+  for(s in 1:length(stations_vec)) {
+    station <- stations_vec[s]
+    for(d in 2:length(date_vec)) { # first date is always NA's for change in pin height
+      survey_date <- date_vec[d]
+      fig <- fig %>% 
+        
+        add_pie(data = dplyr::filter(dat, station_name == station & event_date_UTC == survey_date),
+                name = paste0(station, "_", survey_date),
+                labels = ~level, 
+                values = ~N,
+                textposition = 'inside',
+                textinfo = 'percent',
+                hoverinfo = 'text',
+                text = ~hover_label,
+                marker = list(colors = discrete_cols, line = list(color = '#FFFFFF', width = 1)),
+                domain = list(row = s-1, column = d-1))
+      }
+  }
+
+  date_seq_px <- seq(75, width_px-75, length.out = length(date_vec))/width_px # this is where date labels should align on x-axis, when reference is "paper"
+  y_seq_px <- seq(50, height_px-50, length.out = length(stations_vec))/height_px
+  title_loc <- 1 + (90/height_px) #it's into the top margin space, when reference is "container"
+  legend_loc <- 1 + (50/height_px)
+  dates_loc_bottom <- -1 * (50/height_px)
+  
+  dates_labels_bottom <- list(
+  text = as.list(as.character(date_vec)),
+  xref = "paper",
+  yref = "container",
+  yanchor = "center",
+  xanchor = "center",
+  font =list(size = 14),
+  align = "right",
+  x = date_seq_px,
+  y = dates_loc_bottom,
+  showarrow = FALSE)
+  
+  station_labels_left <- list(
+    text = as.list(sort(unique(dat$station_name), decreasing = TRUE)),
+    xref = "paper",
+    yref = "paper",
+    xanchor = "right",
+    yanchor = "center",
+    font =list(size = 14),
+    align = "center",
+    x = -0.02,
+    y = y_seq_px,
+    showarrow = FALSE)
+  
+  fig_final <- fig %>% layout(
+    margin = m,
+    title = list(
+      text = plot_title,
+      x = 0.5,
+      y = title_loc,
+      xref = "container", # gets cut off if referenced to the plot only ("paper")
+      yref = "paper",
+      xanchor = "center",
+      yanchor = "center"),
+    showlegend = TRUE,
+    legend = list(
+      orientation = "h",
+      x = 0.5,
+      xref = "container",
+      yref = "paper",
+      xanchor = "center",
+      y = legend_loc,
+      yanchor = "center"),
+    grid=list(
+      rows=length(stations_vec),
+      columns=length(date_vec)),
+    autosize = FALSE,
+    annotations = station_labels_left) 
+  
+  fig_final <- fig_final %>% layout(annotations = dates_labels_bottom)
+  
+  
+  
+  
+  
+  fig_final <- fig_final %>% layout(
+    title = "Pie Charts (each row is a Station, each column is a Survey Event)", 
+    showlegend = FALSE,
+    grid=list(
+      rows=length(unique(dat$station_name)),
+      columns=length(unique(dat$event_date_UTC))),
+    xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+    yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+    autosize = FALSE,
+    width = 150 * length(unique(dat$event_date_UTC)), # this is the plot width (paper)
+    height = 150 * length(unique(dat$station_name)) # this is the plot height (paper)
+    )
+  
+  return(fig_final)
+}
+
+FuncOrderCheck <- function(import = TRUE, examine = TRUE) {
+  # Function to check if data have been imported and filtered
+
+  if(import == TRUE) {
+    cat("line978")
+    shiny::validate(
+      need(!is.null(rv$DataSET), message = "No data available. Please first import SET data (green buttons on 'Home' tab)."))
+  }
+  
+  if(examine == TRUE) {
+    cat("line984")
+    shiny::req(!is.null(rv$DataSET))
+    shiny::validate(
+      need(!is.null(rv$SubDataSET), message = "Please first use the 'PARK SUMMARY' tab to choose a park and a subset of data to examine."))
+    shiny::validate(
+      need(!is.null(rv$SubDataSummary), message = "Please first use the 'PARK SUMMARY' tab to choose a park and a subset of data to examine."))
+  }
+}
+
+FuncFormatSET_NERRs <- function(dat) {
+  temp_NERRs <- dat %>%
+    dplyr::filter(park_code %in% input$sel_export_parks) %>%
+    dplyr::mutate(
+      reserve = park_code,
+      set_id = paste0(station_name, "_Pipe", SET_direction_azimuth),
+      year = lubridate::year(event_date_UTC),
+      month = lubridate::month(event_date_UTC),
+      day = lubridate::day(event_date_UTC),
+      arm_position = SET_direction_azimuth,
+      arm_qaqc_code = NA,
+      pin_number = paste0("pin_", pin_position),
+      height_mm = pin_height_mm,
+      qaqc_code = NA) %>%
+    dplyr::select(reserve, set_id, year, month, day, arm_position, arm_qaqc_code, pin_number, height_mm, qaqc_code)
+  return(temp_NERRs)
+}
+  
+```
+
+```{r action_buttons}
+
+# Generic action to cancel modal ----
+observeEvent(eventExpr = input$button_CancelModal, {
+  removeModal()
+  })
+
+# (Home) Import and format data via SQL database download ----
+observeEvent(eventExpr = input$button_ImportSQL, {
+  shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
+  shiny::validate(need(grepl("SQL", input$database_server), message = "Enter a valid SQL Database Server"))
+  shiny::validate(need(!is.null(input$network_code), message = "Select at least one network"))
+  options(useFancyQuotes = FALSE)
+  network_code <- paste(sQuote(input$network_code), collapse = ",")
+  
+  withProgress(message = "Just a moment", value = 0, {
+    
+    incProgress(1/10, detail = "...connecting to SQL server")
+        
+         # Build a new connection and connect to the database server
+        
+        con <- DBI::dbConnect(odbc::odbc(),
+                      Driver =  input$database_driver,
+                      Server = input$database_server,
+                      Database = "SET",
+                      Trusted_Connection = "Yes",
+                      Port = 1433)
+  # SQL setup
+        DBI::dbGetQuery(con, "SET ANSI_WARNINGS OFF")
+        DBI::dbGetQuery(con, "SET NOCOUNT ON")
+  
+  incProgress(1/10, detail = "...getting Marker Horizon data")
+  
+  marker_horizon_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_marker_horizon_data WHERE [network_code] IN (%s)", network_code)
+marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
+  shiny::validate(need(!is.null(marker_horizon_data), message = "Could not import Marker Horizon data"))
+  
+  incProgress(1/10, detail = "...getting Pin Group data")
+  
+  pin_group_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_SET_pin_information WHERE [network_code] IN (%s)", network_code)
+  pin_group_data <- DBI::dbGetQuery(con, pin_group_data_SQL)
+  shiny::validate(need(!is.null(pin_group_data), message = "Could not import Pin Groups data"))
+  
+  incProgress(1/10, detail = "...getting Pin data")
+  
+  pin_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_SET_data_FINAL WHERE [network_code] IN (%s)", network_code)
+  pin_data <- DBI::dbGetQuery(con, pin_data_SQL)
+  shiny::validate(need(!is.null(pin_data), message = "Could not import Pin data"))
+  
+  incProgress(1/10, detail = "...getting Station data")
+  
+  station_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_stations WHERE [network_code] IN (%s)", network_code)
+  station_data <- DBI::dbGetQuery(con, station_data_SQL)
+  shiny::validate(need(!is.null(station_data), message = "Could not import Station data"))
+  
+  incProgress(1/10, detail = "...getting Events data")
+  
+  event_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_events WHERE [network_code] IN (%s)", network_code)
+  event_data <- DBI::dbGetQuery(con, event_data_SQL)
+  shiny::validate(need(!is.null(event_data), message = "Could not import Event data"))
+  
+  incProgress(1/10, detail = "...getting CriticalInformation data")
+  critical_information_data_SQL <- sprintf("SELECT * FROM ssrs.vw_dbx_critical_information WHERE [network_code] IN (%s)", network_code)
+  critical_information_data <- DBI::dbGetQuery(con, critical_information_data_SQL)
+    shiny::validate(need(!is.null(critical_information_data), message = "Could not import Critical Information data"))
+
+  
+  # Disconnect from the database server to free up resources
+  dbDisconnect(con)
+
+    # Save SQL files as .csv 
+  incProgress(1/10, detail = "...formatting and saving data files")
+  
+  # Class types for data columns
+      factor_cols <- c("datum", "location_datum", "station_datum", "double_read_type", "dpl", "DPL", "network_code", "network_name", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag_code", "pin_flag_label", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status", "exclude_int_user", "exclude_cumul_user", "reader_name", "core_type", "core_condition", "foot_present", "group_isretired", "marker_horizon_data_collected", "pin_data_collected", "double_read_pin_collected", "category_code", "category_label") # these variables have a relatively small set number of possible values
+    integer_cols <- c("SET_direction_azimuth", "SET_offset_mm", "pin_length_mm", "station_elev_m", "pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m", "exclude_int_user_ID", "exclude_int_reason_ID", "exclude_cumul_user_ID", "exclude_cumul_reason_ID", "inundation_level_cm", "core_measurement_number", "core_measurement_depth_mm", "pin_position") 
+  
+  if(!dir.exists(file.path(here::here(), "Data_in"))) {
+    dir.create(file.path(here::here(), "Data_in"))} # create a 'Data_in' subfolder if it doesn't exist
+  
+    dat_list <- list()
+    dat_vec <- c("marker_horizon_data", "pin_group_data", "pin_data", "station_data", "event_data", "critical_information_data")
+    
+    # Look for data .csv files. This double-checks the data have been saved to computer
+    
+  for(x in dat_vec) {
+    # shiny::validate(need(!is.null(x), message = paste0("Cannot find ", x, " data. Please check for SQL import problems.")))
+    cat(x)
+    
+    write.csv(get(x), file = here::here("Data_in", paste0(x, "_dashboard.csv")), row.names = FALSE) # save the raw data (does not include the download date)
+    
+    # ...then read the data back in to format it for an .RDS file
+    filepath_string<- Sys.glob(file.path(here::here("Data_in",  paste0(x, "_dashboard.csv"))))
+    temp_dat <- read.csv(filepath_string, na.strings = "NULL", fileEncoding="UTF-8-BOM") # need to add fileEncoding argument so doesn't add junk characters to first column name
+    temp_dat[temp_dat == "NA"] <- NA # weird issue where read.csv converts cells to character "NA" instead of empty string NA
+    
+    # Data frame-specific additional formatting
+    if(x == "pin_data") {
+      temp_dat %<>% dplyr::rename(dpl = dpl_label) %>% 
+      dplyr::arrange(network_name, park_name, site_name, station_name, SET_direction_azimuth, pin_position, event_date_UTC, observation_type) %>%
+      dplyr::mutate(record_ID = row_number()) %>%
+      dplyr::select(record_ID, everything()) # arrange column order
+    }
+    
+    if(x == "marker_horizon_data") {
+      temp_dat %<>% 
+        dplyr::arrange(network_name, park_name, site_name, station_name, marker_horizon_name, core_measurement_number, event_date_UTC) %>%
+        dplyr::mutate(record_ID = row_number()) %>%
+        dplyr::select(record_ID, everything()) # arrange column order
+    }
+    
+    if(x == "event_data") {
+      temp_dat %<>% dplyr::rename(dpl = DPL)
+    }
+      
+    # General formatting for all
+    temp_dat %<>%
+      dplyr::mutate_at(vars(matches(factor_cols)), as.factor) %>% 
+      dplyr::mutate_at(vars(matches(integer_cols)), as.integer) %>%
+      dplyr::mutate_at(vars(matches("_date")), base::as.Date)
+    
+    if("event_date_UTC" %in% names(temp_dat)) {
+      temp_dat %<>%
+        dplyr::mutate(
+          event_date_yr = lubridate::year(event_date_UTC), # for annual summaries
+          event_date_mnth = factor(lubridate::month(event_date_UTC), levels = 1:12),
+          event_date_wk = factor(lubridate::week(event_date_UTC), levels = 1:53)
+          )
+    }
+    dat_list[[x]] <- temp_dat
+  }
+    
+    # Clear things out
+    rm(list = dat_vec)
+    unlink(list.files(path = here::here(), pattern = "^dataMaid"))
+    cat("line1136")
+    rv$DataSET <- as.data.frame(FuncCalcChange(dat = dat_list$pin_data)) 
+    rv$DataStation <- dat_list$station_data
+    rv$DataEvent <- dat_list$event_data
+    rv$DataCriticalInfo <- dat_list$critical_information_data
+    rv$DataMarker <- as.data.frame(FuncCalcMH(dat = dat_list$marker_horizon_data)) 
+    
+    shiny::req(!is.null(rv$DataSET))
+
+    incProgress(1/10, detail = "...saving formatted data")
+    showModal( # Pop-up modal asking user to enter prefix to append to saved files
+      modalDialog(
+        textInput("out_prefix", "Prefix to append to output files: ",
+                  placeholder = paste0("SET_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date()))),
+                value = paste0("SET_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())))
+      ),
+      footer = tagList(
+        actionButton("button_go_save", "SAVE")
+      )
+    ))
+    
+    observeEvent(input$button_go_save, {
+   
+    if(!dir.exists(file.path(here::here(), "Data_out"))) {
+      dir.create(file.path(here::here(), "Data_out"))} # create a 'Data_out' subfolder if it doesn't exist
+    saveRDS(isolate(reactiveValuesToList(rv)), here::here("Data_out", paste0(input$out_prefix, ".RDS")))
+
+    Sys.sleep(0.5)
+    showModal(modalDialog(
+      title = "Done",
+      HTML("The formatted data have been saved as '", input$out_prefix, ".RDS' (for future dashboard use) in the 'Data_out' folder of the current working directory, ", getwd(), ". The original (raw) tables imported from SQL have been saved as .csv files in the 'Data_in' folder of the current working directory. <br><br>You may now navigate to the PARK SUMMARY tab to run Data Check reports.") 
+    ))
+    
+  }) # end of save
+    }) # end of progress messages
+  }) # end of SQL import
+
+# (Home) Load data as RDS ----
+observeEvent(eventExpr = input$button_LoadRDS, {
+  showModal(modalDialog(
+    fileInput("saved_data_file", label = "Import a SET file already formatted for dashboard use ('RDS' extension)", placeholder = "Click 'Browse...' button then navigate to file", accept = c('.RDS'), width = "100%"),
+    footer = tagList(
+      modalButton("Cancel")
+    )
+  ))
+})
+
+observeEvent(eventExpr = input$saved_data_file, {
+  if(!toupper(tools::file_ext(input$saved_data_file$datapath)) %in% c("RDS")) {
+    showModal(modalDialog(
+        title = "Error",
+        "File must have .RDS extension. Please select a different file."
+    ))
+} else {
+  tryCatch(out <- readRDS(input$saved_data_file$datapath),
+           error = function(e) {out <- NULL; print("Cannot import the selected file")})
+  
+  shiny::req(!is.null(out))
+  if(class(out)!="list") {
+    showModal(modalDialog(
+    title = "Error",
+    "Cannot import the selected file. Please try a different .RDS file."
+    ))
+    rm(out)
+    }
+  
+  shiny::req(!is.null(out))
+  unlink(list.files(path = here::here(), pattern = "^dataMaid"))
+
+  for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
+    if(!is.null(out[i])) {
+    rv[[i]] <- out[[i]] # load the data in the dashboard
+    }
+  }
+
+  Sys.sleep(0.5)
+  showModal(modalDialog(
+  title = "Done",
+  "You may now navigate to the PARK SUMMARY tab to select a Park Unit."
+  ))
+}
+})
+
+# (Examine) Run data check (dataMaid report) ----
+observeEvent(eventExpr = input$button_RunDataCheck, {
+  shiny::req(!is.null(rv))
+  unlink(list.files(path = here::here(), pattern = "^dataMaid")) 
+  rv$ShowDM <- FALSE
+  
+      cat("line777")
+
+  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary), !is.null(input$sel_Pin_or_MH)) 
+
+withProgress(message = "Just a moment", detail = "...generating data check report", value = 0, { # show progress bar
+  
+  if(input$sel_Pin_or_MH == "pin") {
+    check_sub <- rv$SubDataSET %>%
+      dplyr::select(-record_ID, -pin_flag_notes, -vegetation_notes, -SET_direction_notes, -SET_notes, -dpl_note)
+  } else {
+    check_sub <- rv$SubDataMarker %>%
+      dplyr::select(-record_ID, -marker_horizon_name, -core_measurement_number, -core_event_notes, -core_notes)
+  }
+    
+    shiny::req(!is.null(check_sub))
+    if(nrow(check_sub) > 0) {
+
+dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
+  character = "vertLabStandardVisual",
+  factor = "vertLabStandardVisual",
+  labelled = "vertLabStandardVisual",
+  haven_labelled = "vertLabStandardVisual",
+  numeric = "standardVisual",
+  integer = "standardVisual",
+  logical = "vertLabStandardVisual",
+  Date = "standardVisual"), listChecks = FALSE, smartNum = FALSE, reportTitle = paste0("Station ", toupper(as.character(rv$SubDataSummary[input$out_TableSummary_rows_selected, "station_name"]))), render = TRUE, output = "html", openResult = FALSE, replace = TRUE, useVar = names(check_sub), file = "dataMaid.Rmd")
+      rv$ShowDM <- file.exists(here::here("dataMaid.html"))
+
+    }
+  })
+})
+
+# (Pin Heights) Update Summaries ----
+observeEvent(eventExpr = input$button_RecalcPinHeights, { 
+  
+  
+  #     saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+
+  shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinSite),  !is.null(input$sel_ThresholdType))
+
+  withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
+    cat("line766")
+
+    # Create raw pin heat plots
+    pin_heat_dat <- FuncCalcPinAlert(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_PinSite & observation_type == "Standard"), event_level_dat = dplyr::filter(rv$SubDataEvent, site_name == input$sel_PinSite) %>% dplyr::select(station_name, event_date_UTC, event_notes))
+cat("line1034")
+    
+    rv$sel_PinSite <- input$sel_PinSite
+    rv$sel_HeatMetric <- input$sel_HeatMetric
+    
+    cat("line766")
+    
+    # Calculate threshold levels
+    if(input$sel_ThresholdType == "quant") {
+    shiny::req(!is.null(input$sel_QuantileGroup), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper))
+    rv$PinHeatDataSET <- FuncCalcQuant(dat = pin_heat_dat)
+    }
+    cat("line772")
+
+    if(input$sel_ThresholdType == "numb") {
+      shiny::req(!is.null(input$sel_ThresholdLower), !is.null(input$sel_ThresholdUpper))
+      rv$PinHeatDataSET <- FuncCalcThresh(dat = pin_heat_dat)
+    }
+    cat("line978")
+    
+    # Create pin change heat plots
+    shiny::req(!is.null(rv$PinHeatDataSET), !is.null(input$sel_HeatMetric))
+cat("line1040")
+
+    incProgress(1/3, detail = paste0("...creating heat plots"))
+    
+    rv$PinHeatPlots <- FuncPlotlyMatrixPlot(dat = rv$PinHeatDataSET, heat_metric = input$sel_HeatMetric)
+    cat("988")
+    
+    # Count threshold levels
+    rv$ThreshCounts <- rv$PinHeatDataSET %>%
+    dplyr::select(record_ID, park_code, site_name, station_name, event_date_UTC, lower_cutoff, upper_cutoff, level) %>%
+    dplyr::group_by(park_code, site_name, station_name, event_date_UTC, lower_cutoff, upper_cutoff, level, .drop = FALSE) %>%
+    dplyr::summarise(N = n()) %>%
+    dplyr::mutate(hover_label = paste0("park_name: ", park_code, "<br>Station: ", station_name, "<br>Date: ", event_date_UTC, "<br>Upper Cutoff: ", upper_cutoff, "<br>lower_cutoff", lower_cutoff, "<br>LEVEL: ", level, "<br>COUNT: ", N))
+    cat("line795")
+    
+    incProgress(1/3, detail = paste0("...calculating map data"))
+    
+    # Create map
+    shiny::req(!is.null(rv$ThreshCounts), !is.null(rv$DataStation))
+    rv$MapDat <- rv$ThreshCounts %>%
+      dplyr::ungroup() %>%
+      dplyr::select(site_name, station_name, event_date_UTC, lower_cutoff, upper_cutoff, level, N) %>%
+      dplyr::filter(event_date_UTC != min(rv$ThreshCounts$event_date_UTC, na.rm = TRUE)) %>% # First Sampling date is all NA's so omit
+      spread(key = level, value = N, drop = FALSE, fill = 0) %>%
+      left_join(unique(rv$DataStation[c("park_name", "park_code", "site_name", "station_name", "station_latitude", "station_longitude")]), by = c("site_name", "station_name"))
+    # })
+  }) 
+})
+
+# (Markers) Update Summaries ----
+observeEvent(eventExpr = input$button_RecalcMH, { 
+
+  shiny::req(!is.null(rv$SubDataMarker), !is.null(input$sel_MHSite), !is.null(input$sel_MHAlerts), !is.null(input$sel_MHReaderAlert))
+  withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
+    cat("line766")
+
+    # Create MH heat plots
+    rv$MarkerHeatDataSET <- FuncCalcMHAlert(dat = dplyr::filter(rv$SubDataMarker, site_name == input$sel_MHSite))
+
+    rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = rv$MarkerHeatDataSET, heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
+    cat("line983")
+    
+    rv$sel_MHSite <- input$sel_MHSite
+  }) 
+})
+
+```
+
+```{r page_examine_data}
+
+# Show/hide well panels ----
+renderUI({
+  if(!is.null(rv$DataSET)) {
+    shinyjs::showElement("wp_ExaminePark")
+    } else {
+      shinyjs::hideElement("wp_ExaminePark")
+    }
+
+  if(!is.null(rv$DataSET) & !is.null(input$sel_Park)) {
+    shinyjs::showElement("wp_ExamineFilter")
+    } else {
+      shinyjs::hideElement("wp_ExamineFilter")
+    }
+})
+
+# Filter and summarize data ----
+renderUI({
+ 
+  shiny::req(!is.null(rv$DataSET), !is.null(rv$DataEvent), !is.null(rv$DataCriticalInfo), !is.null(rv$DataMarker), !is.null(input$sel_Park), !is.null(input$sel_YrRange[1]), !is.null(input$sel_YrRange[2]), !is.null(input$sel_ProcessLevel), !is.null(input$sel_ObservationType))
+       
+  # SET data
+  rv$SubDataSET <- rv$DataSET %>%
+  dplyr::filter(
+    park_name == input$sel_Park & event_date_yr >= as.integer(input$sel_YrRange[1]) & event_date_yr <= as.integer(input$sel_YrRange[2]) & (dpl %in% input$sel_ProcessLevel) & (observation_type %in% input$sel_ObservationType)) %>%
+    as.data.frame() 
+  
+  shiny::req(!is.null(rv$SubDataSET))
+  shiny::req(nrow(rv$SubDataSET) > 0)
+  
+  rv$SubDataEvent <- rv$DataEvent %>%
+    dplyr::filter(
+      park_name == input$sel_Park & lubridate::year(event_date_UTC) >= as.integer(input$sel_YrRange[1]) & lubridate::year(event_date_UTC) <= as.integer(input$sel_YrRange[2])) 
+
+  rv$SubDataSummary <- rv$SubDataSET %>%
+    dplyr::group_by(park_name, site_name, station_name) %>%
+    dplyr::summarize(
+      min_yr = as.integer(min(event_date_yr, na.rm = TRUE)),
+      max_yr = as.integer(max(event_date_yr, na.rm = TRUE)),
+      total_survey_yrs = n_distinct(event_date_yr),
+      num_records = n(),
+      raw_perc = round(100* sum(dpl == "Raw")/num_records),
+      provisional_perc = round(100* sum(dpl == "Provisional")/num_records),
+      accepted_perc = round(100* sum(dpl == "Accepted")/num_records)
+      ) %>% 
+    dplyr::ungroup() %>%
+    droplevels() %>%
+    as.data.frame()
+
+  shiny::req(!is.null(rv$SubDataSummary))
+  shiny::req(nrow(rv$SubDataSummary) > 0)
+  
+  rv$SubDataDateSummary <- rv$SubDataSET %>%
+    dplyr::group_by(park_name, site_name, station_name, event_date_UTC) %>%
+    dplyr::summarize(
+      SET_reader = unique(SET_reader),
+      num_records = n(),
+      validation_status = unique(validation_status),
+      dpl_status = unique(dpl)
+      ) %>%
+    dplyr::ungroup() %>%
+    droplevels() %>%
+    as.data.frame()
+    
+  shiny::req(!is.null(rv$SubDataDateSummary))
+  shiny::req(nrow(rv$SubDataDateSummary) > 0)
+  
+  # Marker Horizon data
+  rv$SubDataMarker <- rv$DataMarker %>%
+  dplyr::filter(
+    park_name == input$sel_Park & event_date_yr >= as.integer(input$sel_YrRange[1]) & event_date_yr <= as.integer(input$sel_YrRange[2]) & (dpl %in% input$sel_ProcessLevel)) %>%
+    as.data.frame() 
+  
+  shiny::req(!is.null(rv$SubDataMarker))
+  shiny::req(nrow(rv$SubDataMarker) > 0)
+
+  rv$SubDataMarkerSummary <- rv$SubDataMarker %>%
+    dplyr::group_by(park_name, site_name, station_name) %>%
+    dplyr::summarize(
+      min_yr = as.integer(min(event_date_yr, na.rm = TRUE)),
+      max_yr = as.integer(max(event_date_yr, na.rm = TRUE)),
+      total_survey_yrs = n_distinct(event_date_yr),
+      num_records = n(), 
+      raw_validated = round(100* sum(validation_status == "ManuallyValidated", na.rm = TRUE)/num_records),
+      ) %>% 
+    dplyr::ungroup() %>%
+    droplevels() %>%
+    as.data.frame()
+
+  shiny::req(!is.null(rv$SubDataMarkerSummary))
+  shiny::req(nrow(rv$SubDataMarkerSummary) > 0)
+  
+  rv$SubDataDateMarkerSummary <- rv$SubDataMarker %>%
+    dplyr::group_by(park_name, site_name, station_name, event_date_UTC) %>%
+    dplyr::summarize(
+      MH_reader = unique(reader_name),
+      core_type = unique(core_type),
+      num_records = n(),
+      validation_status = unique(validation_status),
+      dpl_status = unique(dpl)
+      ) %>%
+    dplyr::ungroup() %>%
+    droplevels() %>%
+    as.data.frame()
+   
+  shiny::req(!is.null(rv$SubDataDateMarkerSummary))
+  shiny::req(nrow(rv$SubDataDateMarkerSummary) > 0)
+  
+  # Sys.sleep(0.5) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
+  })
+```
+
+```{r page_threshold_plots}
+
+# Show/hide well panels ----
+renderUI({
+  if(!is.null(rv$SubDataSET)) {
+    shinyjs::showElement("wp_Thresholds")
+    } else {
+      shinyjs::hideElement("wp_Thresholds")
+    }
+})
+```
+
+```{r page_export_NERRs}
+renderUI({
+  if(!is.null(rv$DataSET)) {
+    shinyjs::showElement("wp_NERRs")
+    } else {
+      shinyjs::hideElement("wp_NERRs")
+    }
+})
+
+renderUI({
+  shiny::req(!is.null(input$sel_export_parks), !is.null(rv$DataSET))
+
+  rv$DataSET_NERRs <- FuncFormatSET_NERRs(dat = rv$DataSET)
+  Sys.sleep(0.5) # Need to give it time to update, or will generate warning on dashboard
+})
+
+output$button_exportNERRs <- downloadHandler(
+    filename = function() {
+      return(paste0("SET_forNERRs_", paste0(gsub(pattern = "-", replacement = "", x = Sys.Date())),".csv"))
+      },
+    content = function(file) {
+      write_csv(rv$DataSET_NERRs, file)
+    }
+    )
+```
+    
+HOME
+=========================================
+
+Column {data-width=5}
+-------------------------------------
+
+Column {data-width=30}
+-------------------------------------
+
+```{r image1, echo = FALSE}
+htmltools::img(src="images/Jim_SET2.jpg", width = "100%", style="display: block; margin-top:10px; margin-bottom:0px; margin-right:40px; margin-left:-20px")
+```
+
+```{r image2, echo = FALSE}
+htmltools::img(src="images/Assateague.jpg", width = "100%", style="display: block; margin-top:10px; margin-bottom:0px; margin-right:40px; margin-left:-20px")
+```
+
+Column {data-width=5}
+-------------------------------------
+
+Column {data-width=80}
+-------------------------------------
+#### <font size="4"><b> Monitoring Wetland Elevation Dynamics in National Park Units</b></font> 
+
+<font size="3"> 
+This dashboard is an interactive tool for QAQC and visualizing wetland elevation data collected in national park units. Wetland elevation is monitored using the Surface Elevation Table (SET) and marker horizons. Summary tables and graphs can be exported as .csv and .png files, respectively.</font>
+
+<font size="3"><b>IMPORT DATA - OPTION 1: PULL FROM SQL</b>
+
+This option will generate .CSV FILES OF THE SQL VIEWS and also an .RDS FILE to run the dashboard.
+
+1.  Enter your SQL DRIVER and the SQL DATABASE SERVER.
+
+```{r}
+textInput("database_driver", "Enter your SQL DRIVER: ",
+                  placeholder = "e.g., SQL Server",
+                  value = "SQL Server"
+                  )
+```
+
+```{r}
+textInput("database_server", "Enter the SQL DATABASE SERVER: ",
+                  placeholder = NULL,
+                  value = ""
+                  )
+```
+
+```{r}
+checkboxGroupInput(
+  "network_code",
+  label = strong("Include data from these network(s): "),
+  choices = c("NCBN", "NCRN", "NETN", "SECN", "SFCN"),
+  selected = c("NCBN", "NCRN", "NETN", "SECN", "SFCN"))
+```
+
+2.  Make sure you are on VPN. Then click the green 'Import/Summarize Data from SQL' button.
+
+```{r}
+actionButton("button_ImportSQL", "Import/Summarize Data from SQL (MUST BE ON VPN!!)", style="color:black; background-color: lightgreen; border:2px; margin:5px; width:400px; display:inline-block;")
+```
+
+3.  When the import is complete, a pop-up window will tell you where a dashboard .RDS file and .csv files of the SQL views have been saved on your computer. You may now navigate to other dashboard tabs to view raw data and QAQC summaries.
+</font>
+
+<br>
+
+<font size="3"><b>IMPORT DATA - OPTION 2: IMPORT AN .RDS FILE</b>
+
+Use this option if you already have an .RDS FILE to run the dashboard.
+
+1.  Click the green 'Import/Summarize Data from RDS File' button.
+
+```{r}
+actionButton("button_LoadRDS", "Import/Summarize Data from RDS File",
+             style="color:black; background-color: lightgreen; border:2px; margin:5px; width:400px; display:inline-block;")
+```
+
+2.  A pop-up screen will ask you to browse to the .RDS file you want to import. Browse to the .RDS file and double-click it or highlight the file and then select 'Open'.
+
+3.  When the import is complete, a pop-up window will indicate you may navigate to other dashboard tabs to view raw data and QAQC summaries.
+</font>
+
+Column {data-width=10}
+-------------------------------------
+
+PARK SUMMARY
+====================================== 
+
+Inputs {.sidebar data-width=300}
+-------------------------------------
+```{r input_examine}  
+  wellPanel(
+    id = "wp_ExaminePark",
+    
+    renderUI({
+      shiny::req(!is.null(rv$DataSET))
+      selectInput(
+        "sel_Park",
+        label = strong("Select a Park: "),
+        choices = sort(unique(rv$DataSET$park_name)),
+        selected = switch(is.null(input$sel_Park)+1, input$sel_Park, sort(unique(rv$DataSET$park_name))[1])
+        )
+      })
+  )
+
+shinyjs::hidden( # hide this well panel until !is.null(input$sel_Park)
+  wellPanel(
+    id = "wp_ExamineFilter",
+    
+    renderUI({
+      cat("line1577")
+      shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park))
+      cat("line1578")
+      sliderInput(
+        "sel_YrRange",
+        label = strong("Range of years to summarize:"), 
+        min = min(rv$DataSET$event_date_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
+        max = max(rv$DataSET$event_date_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), 
+        step = 1, 
+        sep="", 
+        value = c(min(rv$DataSET$event_date_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE), max(rv$DataSET$event_date_yr[rv$DataSET$park_name == input$sel_Park], na.rm = TRUE)), 
+        dragRange = TRUE, 
+        width = "85%")
+      }),
+    
+    renderUI({
+      shiny::req(!is.null(rv$DataSET))
+      checkboxGroupInput(
+        "sel_ProcessLevel",
+        label = strong("Include these data processing levels: "),
+          choices = sort(unique(rv$DataSET$dpl)),
+        selected = sort(unique(rv$DataSET$dpl))
+        )
+      }),
+    
+    renderUI({
+      shiny::req(!is.null(rv$DataSET))
+      checkboxGroupInput(
+        "sel_ObservationType",
+        label = strong("Include these observation types: "),
+        choices = sort(unique(rv$DataSET$observation_type)),
+        selected = sort(unique(rv$DataSET$observation_type))
+        )
+      })
+  )
+)
+```
+
+PARK SUMMARY - Outputs {data-width=100 .tabset .tabset-fade}
+-------------------------------------
+  
+### PIN Summary
+
+<font size="3">**This table summarizes years in service, number of data records, and % of data in each DPL level (raw, provisional, or accepted).**</font>
+
+* Use the left-side panel to select a Park and year range to summarize.
+
+* Click on the triangle to the left of a table record to see DPL summary by survey date for that SET station.
+
+####
+```{r}
+output$out_TableSummary <- renderReactable({
+  cat("line1626")
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  cat("line1628")
+  reactable(
+    rv$SubDataSummary,
+    columns = list(
+      park_name = colDef(show = FALSE),
+      site_name = colDef(name = "Site", minWidth = 150, align = "center"),
+      station_name = colDef(name = "Station", minWidth = 150, sticky = "left", align = "center"),
+      min_yr = colDef(header = with_tooltip("First Sampling", "Earliest year with survey data"), minWidth = 80, align = "center"),
+      max_yr = colDef(header = with_tooltip("Last Sampling", "Most recent year with survey data"), minWidth = 80, align = "center"),
+      total_survey_yrs = colDef(header = with_tooltip("# of Years", "Number of years with survey data"), minWidth = 80, align = "center"),
+      num_records = colDef(name = "# of Records", minWidth = 65, align = "center"),
+      raw_perc = colDef(
+        header = with_tooltip("% Raw", "% of pin data records with DPL = Raw"),
+        minWidth = 120,
+        align = "center",
+        cell = function(value) {
+          width <- paste0(value, "%")
+          bar_chart(value, width = width, fill = "#cc6677", background = "#e1e1e1")
+          }),
+      provisional_perc = colDef(
+        header = with_tooltip("% Provisional", "% of pin data records with DPL = Provisional"),
+        minWidth = 120,
+        align = "center",
+        cell = function(value) {
+          width <- paste0(value, "%")
+          bar_chart(value, width = width, fill = "#ddcc77", background = "#e1e1e1")
+          }),
+      accepted_perc = colDef(
+        header = with_tooltip("% Accepted", "% of pin data records with DPL = Accepted"),
+        minWidth = 120,
+        align = "center",
+        cell = function(value) {
+          width <- paste0(value, "%")
+          bar_chart(value, width = width, fill = "#6699cc", background = "#e1e1e1")
+          })
+      ),
+    details = function(index) {
+      event_info <- rv$SubDataDateSummary[rv$SubDataDateSummary$site_name == rv$SubDataSummary$site_name[index] & rv$SubDataDateSummary$station_name == rv$SubDataSummary$station_name[index], ]
+      htmltools::div(style = "padding: 50px",
+                     reactable(event_info, 
+                               columns = list(
+                                 park_name = colDef(show = FALSE),
+                                 site_name = colDef(show = FALSE),
+                                 station_name = colDef(show = FALSE),
+                                 event_date_UTC = colDef(name = "Survey Date", minWidth = 80, align = "center"),
+                                 SET_reader = colDef(name = "SET Reader", minWidth = 120, align = "center"),
+                                 num_records = colDef(name = "# of Records", minWidth = 60, align = "center"),
+                                 validation_status = colDef(name = "Validation Status", minWidth = 120, align = "center"),
+                               dpl_status = colDef(name = "DPL Status", minWidth = 120, align = "center")
+                               ),
+                               defaultSorted = list(event_date_UTC = "desc"),
+                               resizable = TRUE,
+                               filterable = TRUE,
+                               striped = FALSE,
+                               highlight = TRUE,
+                               showSortIcon = TRUE, 
+                               compact = TRUE,
+                               pagination = FALSE,
+                               outlined = FALSE,
+                               bordered = FALSE,
+                               theme = reactableTheme(backgroundColor = "hsl(186, 56%, 94%)")
+                     )
+      )
+    },
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 25,
+    showPageSizeOptions = TRUE, 
+    onClick = "select")
+})
+reactableOutput("out_TableSummary")
+tags$style("#out_TableSummary{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+
+### MH Summary
+
+<font size="3">**This table summarizes years in service and number of data records.**</font>
+
+* Use the left-side panel to select a Park and year range to summarize.
+
+* Click on the triangle to the left of a table record to see summary by survey date for that SET station.
+
+####
+```{r}
+output$out_TableMarkerSummary <- renderReactable({
+  cat("line1719")
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  cat("lne1721")
+  reactable(
+    rv$SubDataMarkerSummary,
+    columns = list(
+      park_name = colDef(show = FALSE),
+      site_name = colDef(name = "Site", minWidth = 150, align = "center"),
+      station_name = colDef(name = "Station", minWidth = 150, sticky = "left", align = "center"),
+      min_yr = colDef(header = with_tooltip("First Sampling", "Earliest year with survey data"), minWidth = 80, align = "center"),
+      max_yr = colDef(header = with_tooltip("Last Sampling", "Most recent year with survey data"), minWidth = 80, align = "center"),
+      total_survey_yrs = colDef(header = with_tooltip("# of Years", "Number of years with survey data"), minWidth = 80, align = "center"),
+      num_records = colDef(name = "# of Records", minWidth = 80, align = "center"),
+      raw_validated = colDef(
+        header = with_tooltip("% Validated", "% of marker horizon data records that have been manually validated"),
+        minWidth = 120,
+        align = "center",
+        cell = function(value) {
+          width <- paste0(value, "%")
+          bar_chart(value, width = width, fill = "#6699cc", background = "#e1e1e1")
+          })
+      ),
+    details = function(index) {
+      event_info <- rv$SubDataDateMarkerSummary[rv$SubDataDateMarkerSummary$site_name == rv$SubDataMarkerSummary$site_name[index] & rv$SubDataDateMarkerSummary$station_name == rv$SubDataMarkerSummary$station_name[index], ]
+      htmltools::div(style = "padding: 50px",
+                     reactable(event_info, 
+                               columns = list(
+                                 park_name = colDef(show = FALSE),
+                                 site_name = colDef(show = FALSE),
+                                 station_name = colDef(show = FALSE),
+                                 event_date_UTC = colDef(name = "Survey Date", minWidth = 80, align = "center"),
+                                 MH_reader = colDef(name = "MH Reader", minWidth = 120, align = "center"),
+                                 core_type = colDef(name = "Core Type", minWidth = 70, align = "center"),
+                                 num_records = colDef(name = "# of Records", minWidth = 70, align = "center"),
+                                 validation_status = colDef(name = "Validation Status", minWidth = 120, align = "center"),
+                               dpl_status = colDef(name = "DPL Status", minWidth = 120, align = "center")),
+                               defaultSorted = list(event_date_UTC = "desc"),
+                               resizable = TRUE,
+                               filterable = TRUE,
+                               striped = FALSE,
+                               highlight = TRUE,
+                               showSortIcon = TRUE, 
+                               compact = TRUE,
+                               pagination = FALSE,
+                               outlined = FALSE,
+                               bordered = FALSE,
+                               theme = reactableTheme(backgroundColor = "hsl(186, 56%, 94%)")
+                     )
+      )
+    },
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 25,
+    showPageSizeOptions = TRUE, 
+    onClick = "select")
+})
+reactableOutput("out_TableMarkerSummary")
+tags$style("#out_TableMarkerSummary{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+### Data Check Report
+
+<font size="3">**This report summarizes data range/frequency and % missing for every numeric and categorical variable in the raw PIN or Marker Horizon data.**</font>
+
+* Click the 'Run Data Check' button to generate a report for the selected Park, year range, and data type (pin or marker horizon).
+
+<br>
+
+<hr>
+
+<div style='height:60px;'>
+
+```{r}
+splitLayout(
+    cellWidths = c("25%", "35%"),
+    renderUI({
+      shiny::req(!is.null(rv$SubDataSET))
+      radioButtons("sel_Pin_or_MH",
+                   label = strong("Choose a data type:"),
+                   choiceNames = list("SET (pin)", "Marker Horizon"),
+                   choiceValues = list("pin", "marker"),
+                   selected = "pin")
+      }),
+    actionButton("button_RunDataCheck", "Run Data Check", width = "100%", style="border-color:black; background-color: lightgreen; border:0px; margin:0px; width:200px")
+)
+```
+
+</div>
+
+<br>
+
+<div style='height:600px; width:95%;'>
+
+```{r data_check_report}
+addResourcePath("working_dir", here::here())
+
+renderUI({
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  shiny::validate(need(rv$ShowDM == TRUE, message = "Select a Park, then click the green 'Run Data Check' button (may take a little time to run; progress bar is below)"))
+
+  tags$iframe(src="working_dir/dataMaid.html", width = "100%", height = "90%", overflow = "scroll") # don't use 100% for height because it won't show the whole thing
+})
+```
+</div>
+
+### Pin Data
+
+<font size="3">**Raw PIN data for the selected Park and year range.**</font>
+
+####
+```{r}
+  output$out_TablePin <- renderReactable({
+   
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  
+  reactable(
+    rv$SubDataSET %>%
+      dplyr::select(-event_date_yr, -event_date_mnth, -event_date_wk, -diff_height_mm, -diff_days, -SET_reader_change, -SET_reader_transition, -SET_instrument_change, -SET_instrument_transition, -pin_collection_change, -pin_collection_transition),
+    columns = list(
+      network_code = colDef(minWidth = 130),
+      network_name = colDef(minWidth = 180),
+      park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
+      SET_reader = colDef(minWidth = 150),
+      SET_recorder = colDef(minWidth = 150),
+      validation_name = colDef(minWidth = 150),
+      pin_flag_notes = colDef(minWidth = 180),
+      vegetation_notes = colDef(minWidth = 180),
+      SET_direction_notes = colDef(minWidth = 180),
+      SET_notes = colDef(minWidth = 180),
+      dpl_note = colDef(minWidth = 180)
+      ),
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 10,
+    showPageSizeOptions = TRUE)
+})
+reactableOutput("out_TablePin")
+tags$style("#out_TablePin{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+### Marker Horizon Data
+
+<font size="3">**Raw MARKER HORIZON data for the selected Park and year range.**</font>
+
+####
+```{r}
+  output$out_TableMarker <- renderReactable({
+   
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  
+  reactable(
+    rv$DataMarker %>%
+      dplyr::filter(
+        park_name == input$sel_Park & lubridate::year(event_date_UTC) >= as.integer(input$sel_YrRange[1]) & lubridate::year(event_date_UTC) <= as.integer(input$sel_YrRange[2]) & (dpl %in% input$sel_ProcessLevel)),
+    columns = list(
+      network_code = colDef(minWidth = 130),
+      network_name = colDef(minWidth = 180),
+      park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
+      reader_name = colDef(minWidth = 150),
+      core_event_notes = colDef(minWidth = 180),
+      core_notes = colDef(minWidth = 180)
+      ),
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 10,
+    showPageSizeOptions = TRUE)
+})
+reactableOutput("out_TableMarker")
+tags$style("#out_TableMarker{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+### Event Data
+
+<font size="3">**Raw EVENT data for the selected Park and year range.**</font>
+
+####
+```{r}
+  output$out_TableEvent <- renderReactable({
+   
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  
+  reactable(
+    rv$SubDataEvent %>%
+      dplyr::select(-event_date_yr, -event_date_mnth, -event_date_wk),
+    columns = list(
+      network_code = colDef(minWidth = 130),
+      network_name = colDef(minWidth = 180),
+      park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
+      event_notes = colDef(minWidth = 180)
+      ),
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 10,
+    showPageSizeOptions = TRUE)
+})
+reactableOutput("out_TableEvent")
+tags$style("#out_TableEvent{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+### Critical Information
+
+<font size="3">**Raw CRITICAL INFORMATION for the selected Park and year range.**</font>
+
+####
+```{r}
+  output$out_TableCI <- renderReactable({
+   
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  
+  reactable(
+    rv$DataCriticalInfo  %>%
+      dplyr::filter(
+        park_name == input$sel_Park & lubridate::year(event_date_UTC) >= as.integer(input$sel_YrRange[1]) & lubridate::year(event_date_UTC) <= as.integer(input$sel_YrRange[2])),
+    columns = list(
+      network_code = colDef(minWidth = 130),
+      network_name = colDef(minWidth = 180),
+      park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
+      detail = colDef(minWidth = 180)
+      ),
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 10,
+    showPageSizeOptions = TRUE)
+})
+reactableOutput("out_TableCI")
+tags$style("#out_TableCI{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+### Station Data
+
+<font size="3">**Raw STATION data for the selected Park and year range.**</font>
+
+####
+```{r}
+  output$out_TableStation <- renderReactable({
+   
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  
+  reactable(
+    rv$DataStation %>%
+      dplyr::filter(
+        park_name == input$sel_Park),
+    columns = list(
+      network_code = colDef(minWidth = 130),
+      network_name = colDef(minWidth = 180),
+      park_name = colDef(minWidth = 180),
+      station_code = colDef(minWidth = 130),
+      station_name = colDef(minWidth = 130),
+      station_latitude = colDef(minWidth = 180),
+      station_longitude = colDef(minWidth = 180),
+      station_datum = colDef(minWidth = 130),
+      station_notes = colDef(minWidth = 180)
+      ),
+    resizable = TRUE, 
+    filterable = TRUE,
+    striped = FALSE,
+    highlight = TRUE,
+    showSortIcon = TRUE,
+    compact = TRUE,
+    bordered = TRUE,
+    defaultPageSize = 10,
+    showPageSizeOptions = TRUE)
+})
+reactableOutput("out_TableStation")
+tags$style("#out_TableStation{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
+
+Pin Heights
+====================================== 
+
+Inputs {.sidebar data-width=250}
+-------------------------------------
+
+```{r input_pin_heights}
+br()
+  
+actionButton("button_RecalcPinHeights", "Update Summaries", style="border-color:black; background-color: lightgreen; width:210px; border:0px; margin:0px")
+
+br()
+
+strong(renderText(input$sel_Park))
+strong(renderText(paste(input$sel_YrRange, collapse = "-")))
+
+renderUI({
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$SubDataSET))
+  shiny::req(input$sel_Park == unique(rv$SubDataSET$park_name))
+  selectInput(
+    "sel_PinSite",
+    label = strong("Select a Site: "),
+    choices = sort(unique(rv$SubDataSET$site_name)),
+    selected = switch(is.null(input$sel_PinSite)+1, input$sel_PinSite, sort(unique(rv$SubDataSET$site_name))[1])
+        )
+      })
+
+renderUI({
+      shiny::req(!is.null(rv$SubDataSET))
+      radioButtons("sel_HeatMetric",
+                   label = strong("Text to show on heatmaps:"),
+                   choiceNames = list("Pin height", "Change in pin height", "Change in pin height [pin height]"),
+                   choiceValues = list("raw", "change", "combined"),
+                   selected = "combined")
+      })
+
+  wellPanel(
+    id = "wp_PinHeights",
+
+    renderUI({
+      shiny::req(!is.null(rv$DataSET))
+      checkboxGroupInput(
+        "sel_PinAlerts",
+        label = strong("Add RED BORDER if any of these alerts is true for a data record: "),
+          choices = c("DPL is NOT 'Accepted'" = "dpl_alert",
+                      "Has pin flag or notes" = "pin_flag_alert",
+                      "Has vegetation notes" = "veg_notes_alert",
+                      "Has SET notes" = "SET_notes_alert",
+                      "Has analysis flag or notes" = "analysis_alert",
+                      "SET reader changed" = "SET_reader_alert", 
+                      "SET instrument changed" = "SET_instrument_alert",
+                      "Pin collection changed" = "pin_collection_alert",
+
+                      "Has event notes" = "event_notes_alert"),
+        selected = c("pin_flag_alert", "SET_notes_alert", "analysis_alert", "SET_instrument_alert", "pin_collection_alert"))
+   })
+  )
+
+  shinyjs::hidden( # hide this well panel until !is.null(rv$SubDataSET)
+  wellPanel(
+    id = "wp_Thresholds",
+    renderUI({
+      shiny::req(!is.null(rv$SubDataSET))
+      radioButtons("sel_ThresholdType",
+                   label = strong("Set pin height change thresholds as:"),
+                   choiceNames = list("Numbers", "Quantiles"),
+                   choiceValues = list("numb", "quant"),
+                   selected = "numb")
+      }),
+    
+    renderUI({
+  shiny::req(!is.null(input$sel_ThresholdType))
+  conditionalPanel(
+    condition = "(input.sel_ThresholdType == 'quant')",
+    numericInput("sel_QuantileLower",
+                 label = strong("Enter lower quantile for pin height change (or 0 for no lower limit)"),
+                 value = 0.1,
+                 min = 0.0,
+                 max = 1.0,
+                 step = 0.05),
+    numericInput("sel_QuantileUpper",
+                 label = strong("Enter upper quantile for pin height change (or 1 for no upper limit)"),
+                 value = 0.9,
+                 min = 0.0,
+                 max = 1.0,
+                 step = 0.05),
+    
+    radioButtons("sel_QuantileGroup",
+               label = strong("Calculate quantiles:"),
+               choiceNames = list("by site", "by station"),
+               choiceValues = list("site", "station"),
+               selected = "site")
+    )
+  }),
+  
+  
+  renderUI({
+  shiny::req(!is.null(input$sel_ThresholdType))
+  conditionalPanel(
+    condition = "(input.sel_ThresholdType == 'numb')",
+    numericInput("sel_ThresholdLower",
+                 label = "Enter lower limit",
+                 value = -20),
+    numericInput("sel_ThresholdUpper",
+                 label = "Enter upper limit",
+                 value = 20)
+    )
+  })
+  ))
+
+br()
+
+hr()
+
+renderUI({
+  shiny::req(!is.null(rv$MapDat))
+  
+  map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$station_longitude, na.rm = TRUE), latrange = range(rv$MapDat$station_latitude, na.rm = TRUE)))
+  
+  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = map_zoom + 3, value = map_zoom - 1, step = 0.5, ticks = FALSE, dragRange = FALSE, width = "95%")
+})
+
+renderUI({
+  shiny::req(!is.null(rv$MapDat))
+  
+  sliderInput("sel_MapPieSize", label = "Resize map pie charts:", min = 10, max = 100, value = 60, step = 10, ticks = FALSE, dragRange = FALSE, width = "95%")
+})
+```
+
+Pin Heights - Output {.tabset .tabset-fade}
+-------------------------------------
+
+### Heat Plots
+
+<font size="3">**This heatmap shows PIN HEIGHTS or CHANGE IN PIN HEIGHTS for the selected site, color-coded to highlight large increases or declines. Red borders on heatmap cells indicate presence of selected alerts.**</font>
+
+<span style="font-size:18px; color:red;">
+    INTERACTIVE HEAT PLOTS ARE SLOW TO DRAW - PLEASE BE PATIENT 
+</span>
+
+* Only showing pin readings classified as "Standard" (not "Double Read") data.
+
+* Use the left-side panel to set threshold levels and metric (absolute differences or quantiles) for color-coding.
+
+* RED boxes are drawn around heatmap cells if any user-selected data alerts (e.g., change in SET reader) are present.
+
+* Hover over cells to see relevant alerts and data notes.
+
+####
+```{r heat}
+# Addressed the unequal widths issue by putting legend in same R chunk as the graph
+renderPlot({
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$PinHeatPlots))
+  
+  if(unique(rv$PinHeatDataSET$park_name)==input$sel_Park) { # plot should turn blank if user has selected another park and this figure has not updated to reflect that change
+   # hacky legend because plotly heatmaps can't generate horizontal colorbars
+  heat_legend <- grid.arrange(ggpubr::as_ggplot(
+    get_legend(
+      ggplot(rv$PinHeatDataSET, aes(x = event_date_UTC, y = pin_position, fill = level)) +
+        geom_tile() + 
+        scale_fill_manual(values = thresh3_cols, labels = thresh3_levels, na.translate = FALSE, drop = FALSE, name = "change in Pin Height (since prior survey):   ") + 
+        theme(legend.position = "top",
+              legend.key.width = unit(1, "cm"),
+              legend.text = element_text(size = 16, margin = margin(r = 2, unit = "cm")),
+              legend.title = element_text(size = 16)
+        )
+      )
+    )
+  ) 
+  } else {NULL}
+  
+  }, height = 60)
+
+
+renderUI({
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+  cap_text <- switch(rv$sel_HeatMetric,
+                     "raw" = "actual pin heights",
+                     "change" = "CHANGE in pin heights",
+                     "combined" = "CHANGE in pin heights [actual pin heights are shown in brackets]")
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text, "</text></center><br>")) )
+  })
+
+renderPlotly({ # separate validation statements so they are checked in sequence
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  shiny::validate(
+      need(!is.null(rv$PinHeatPlots), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+cat("line1716")
+shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET))
+shiny::validate(need(unique(rv$PinHeatDataSET$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+
+  rv$PinHeatPlots
+})
+```
+
+### Line Plots
+
+<font size="3">**These line plots show PIN HEIGHTS over time for the selected site.**</font>
+
+* Lines are color-coded by arm (direction).
+
+* Thick lines show linear trend for each arm.
+
+* Click on a POINT to highlight all lines for that SET arm.
+
+####
+  
+```{r}
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Trends in actual pin heights</text></center><br>")) )
+  })
+
+renderPlotly({
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  shiny::validate(
+      need(!is.null(rv$sel_PinSite), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+    
+    shiny::validate(need(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+  
+  
+  plot_dat <- rv$SubDataSET %>% 
+    dplyr::filter(site_name == rv$sel_PinSite & observation_type == "Standard") %>%
+    dplyr::select(station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, pin_flag_label, pin_flag_notes) %>%
+    dplyr::mutate(
+      unique_arm = paste0(station_name, "_", SET_direction_azimuth, " (", SET_direction, ")"),
+      unique_pin = paste0(station_name, "_", SET_direction_azimuth, " (", SET_direction, ")", pin_position),
+        hover_text = paste0("<span style='font-size:16px; font-weight:bold;'>", unique_arm, "<br>Pin ", pin_position, "</span><br>Date: ", event_date_UTC, "<br>Pin Height(mm): ", pin_height_mm, ifelse(!is.na(pin_flag_label), paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""))
+      )
+  
+  cbp1 <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#0072B2", "#D55E00", "#999999", "#F0E442", "#000000", "chocolate4", "purple4", "lightpink", "chartreuse", "honeydew2") # Colorblind-friendly palette
+  
+  cbp1_arm <- switch((length(unique(plot_dat$unique_arm)) <= length(cbp1)) + 1,  colorRampPalette(cbp1)(length(unique(plot_dat$unique_arm))), cbp1[1:length(unique(plot_dat$unique_arm))])
+  names(cbp1_arm) = unique(plot_dat$unique_arm)
+  
+  h_plot_dat <- SharedData$new(plot_dat, key = ~unique_arm, group = "line_plot")
+
+  p <- ggplot(h_plot_dat, aes(x = event_date_UTC, y = pin_height_mm, color = unique_arm, text = hover_text)) +
+    geom_line(aes(group = interaction(unique_arm, pin_position), alpha = 1), show.legend = FALSE) + # this alpha needs to be WITHIN aes, otherwise will mess up the grouping 
+    geom_point(size = 0.2, alpha = 0.3, show.legend = FALSE) +
+    geom_smooth(data = plot_dat, aes(group = unique_arm, alpha = 1), method = "lm", se = FALSE, show.legend = FALSE) +
+    scale_colour_manual(values = cbp1_arm) +
+    labs(title = NULL, x = NULL, y = NULL) +
+    theme_bw() +
+    theme(legend.title=element_blank()) +
+    facet_grid(rows = vars(station_name), scales = "free_y")
+  
+  ggplotly(p, tooltip = c("text"), height = length(unique(plot_dat$station_name)) * 350, width = 800) %>%
+    layout(
+     legend = list(title = list(text = "<b>SET Arm</b>"), orientation = 'v', x = 1.08, xref = "paper", xanchor = "left", y = 1, yref = "paper", yanchor = "top")) %>%
+    add_annotations( # x-axis title
+      x = 0.5,
+      y = -0.06,
+      text = "Survey Year",
+          showarrow = F,
+          xref="paper",
+          yref="paper",
+          xanchor="center",
+          yanchor="top", # y anchor uses 'middle', x anchor uses 'center'
+          textangle=0,
+          font=list(size=18, family = "Arial")) %>%
+    add_annotations( # shared y-axis title
+      x = -0.06,
+      y = 0.5,
+      text = "Pin Height (mm)",
+          showarrow = F,
+          xref="paper",
+          yref="paper",
+          xanchor="right",
+          yanchor="middle", # y anchor uses 'middle', x anchor uses 'center'
+          textangle=-90,
+          font=list(size=18, family = "Arial")) %>%
+  highlight(on = "plotly_click", opacityDim = 0.35)
+})
+```
+
+### Pie Charts
+
+<font size="3">**These pie charts show large increases or declines in pin heights (CHANGE IN PIN HEIGHTS) as % of the data for a survey event.**</font>
+
+####
+```{r pie_charts}
+# Initially tried renderPlotly, but had problems when percentiles were not initially selected, then later selected
+ 
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>% of Station-Survey data in each pin height change category</text></center><br>")) )
+  })
+
+renderPlot({
+  shiny::req(!is.null(rv$PinHeatDataSET), !is.null(rv$PinHeatPlots))
+  
+    if(unique(rv$PinHeatDataSET$park_name)==input$sel_Park) { # plot should turn blank if user has selected another park and this figure has not updated to reflect that change
+  # hacky legend because plotly heatmaps can't generate horizontal colorbars
+  heat_legend <- grid.arrange(ggpubr::as_ggplot(
+    get_legend(
+      ggplot(rv$PinHeatDataSET, aes(x = event_date_UTC, y = pin_position, fill = level)) +
+        geom_tile() + 
+        scale_fill_manual(values = thresh3_cols, labels = thresh3_levels, na.translate = FALSE, drop = FALSE, name = "change in Pin Height (since prior survey):   ") + 
+        theme(legend.position = "top",
+              legend.key.width = unit(1, "cm"),
+              legend.text = element_text(size = 16, margin = margin(r = 2, unit = "cm")),
+              legend.title = element_text(size = 16)
+        )
+      )
+    )
+  )
+    } else {
+      NULL
+    }
+  }, height = 60)
+
+output$out_PieCharts <- renderPlotly({
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+    shiny::validate(
+      need(!is.null(rv$sel_PinSite), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+    
+  shiny::req(!is.null(rv$ThreshCounts), !is.null(input$sel_PinSite))
+  
+      shiny::validate(
+      need(!is.null(rv$ThreshCounts), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+      
+          shiny::validate(need(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+      
+  
+  FuncPlotlyPieMatrix(dat = rv$ThreshCounts, plot_title = paste0(input$sel_PinSite, ": Change in Pin Height from Prior Survey (each row is a Station, each column is a Survey Event)"))
+})
+
+tags$style("#out_PieCharts{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+plotlyOutput('out_PieCharts', height="100%", width = "100%")
+```
+
+### Maps
+
+<font size="3">**This map shows the CHANGE IN PIN HEIGHTS pie charts overlaid on a map of the selected site.**</font>
+
+* Use the left-side panel to control map zoom and pie chart sizes.
+
+* Use the time slider (bottom right of map) to select a particular survey event or to play a time lapse of the data.
+
+####
+```{r thresh_map}
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Time lapse map showing % of data in each pin height change category, by Station</text></center><br>")) )
+  })
+
+output$out_ThreshMap <- renderLeaflet({
+  
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  shiny::validate(
+      need(!is.null(rv$MapDat) & !is.null(input$sel_MapZoom) & !is.null(input$sel_MapPieSize), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+  
+  shiny::req(!is.null(input$sel_Park))
+shiny::validate(need(unique(rv$MapDat$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+  
+  long_vec <- na.exclude(rv$MapDat$station_longitude)
+  lat_vec <- na.exclude(rv$MapDat$station_latitude)
+  map_center <- c(mean(c(min(long_vec), max(long_vec))), mean(c(min(lat_vec), max(lat_vec))))
+  
+  thresh_map <- leaflet() %>%
+    addProviderTiles("Esri.WorldImagery", options = providerTileOptions(noWrap = TRUE)) %>%
+    # addPolygons(data = rv$UnitPoly[rv$UnitPoly@data$UNIT_CODE == unique(rv$MapDat$park_code),], layerId = rv$UnitPoly@data$UNIT_CODE, stroke = TRUE, color = "white", weight = 1, opacity = 1, fillOpacity = 0) %>% # park unit outline
+    addScaleBar() %>% 
+    addMinicharts(
+      lng = rv$MapDat$station_longitude,
+      lat = rv$MapDat$station_latitude,
+      time = rv$MapDat$event_date_UTC,
+      type = "pie",
+      transitionTime = 0,
+      layerId = rv$MapDat$station_name, # doesn't work with a label field
+      height = input$sel_MapPieSize,
+      width = input$sel_MapPieSize,
+      chartdata = as.matrix(subset(rv$MapDat, select = thresh3_levels[1:3])),
+      colorPalette = thresh3_cols[1:3]) %>%
+    setView(lng = map_center[1], lat = map_center[2], zoom = input$sel_MapZoom)
+
+  thresh_map
+  })
+
+tags$style("#out_ThreshMap {height: calc(90vh - 100px) !important;}")
+leafletOutput('out_ThreshMap', height="90%", width = "95%")
+```
+
+Marker Horizon Data
+====================================== 
+
+Inputs {.sidebar data-width=250}
+-------------------------------------
+```{r input_MH} 
+  
+br()
+  
+actionButton("button_RecalcMH", "Update Summaries", style="border-color:black; background-color: lightgreen; width:210px; border:0px; margin:0px")
+
+br()
+
+strong(renderText(input$sel_Park))
+strong(renderText(paste(input$sel_YrRange, collapse = "-")))
+
+renderUI({
+  shiny::req(!is.null(rv$SubDataMarker))
+  selectInput(
+    "sel_MHSite",
+    label = strong("Select a Site: "),
+    choices = sort(unique(rv$SubDataMarker$site_name)),
+    selected = switch(is.null(input$sel_MHSite)+1, input$sel_MHSite, sort(unique(rv$SubDataMarker$site_name))[1])
+        )
+      })
+
+shinyjs::hidden(
+  wellPanel(
+    id = "wp_MH",
+
+    renderUI({
+      shiny::req(!is.null(rv$DataSET))
+      checkboxGroupInput(
+        "sel_MHAlerts",
+        label = strong("Highlight cell YELLOW if any of these DATUM ALERTS is true: "),
+          choices = c("DPL is NOT 'Accepted'" = "dpl_alert",
+                      "Core condition is NOT 'Excellent' or 'Good'" = "core_condition_alert",
+                      "Has core notes" = "core_notes_alert",
+                      "Has core event notes" = "core_event_notes_alert"),
+        selected = c("core_condition_alert", "core_notes_alert", "core_event_notes_alert"))
+   }),
+   
+   renderUI({
+      shiny::req(!is.null(rv$DataMarker))
+      checkboxInput(
+        "sel_MHReaderAlert",
+        label = strong("Add RED border if the marker horizon reader has changed"),
+        value = TRUE)
+   })
+  )
+)
+
+```
+
+Marker Horizon Data - Output {.tabset .tabset-fade}
+-------------------------------------
+
+### Heat Plots
+
+<font size="3">**This heatmap shows AVERAGE MARKER HORIZON DEPTH for the selected site, color-coded to show selected alerts.**</font>
+
+<span style="font-size:18px; color:red;">
+    INTERACTIVE HEAT PLOTS ARE SLOW TO DRAW - PLEASE BE PATIENT 
+</span>
+
+* Heatmap cells YELLOW for any selected datum-level alerts.
+
+* RED boxes are drawn around heatmap cells with selected event-level alerts (e.g., change in marker horizon reader).
+
+* Hover over cells to see relevant alerts and data notes.
+
+####
+```{r MH_alert_heat}
+renderUI({
+    shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET), !is.null(rv$sel_MHSite), !is.null(rv$SubDataSET))
+  shiny::req(rv$sel_MHSite %in% unique(rv$SubDataSET$site_name), unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park)
+
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values shown are average marker horizon depth per core ID</text></center><br>")) )
+  })
+
+renderPlotly({ # separate validation statements so they are checked in sequence
+  FuncOrderCheck(import = TRUE, examine = TRUE)
+  shiny::validate(
+      need(!is.null(rv$RawMHHeatPlots), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET))
+shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, message = "Park selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
+
+  rv$RawMHHeatPlots
+})
+```
+
+Export Data for NERRs
+====================================== 
+Inputs {.sidebar data-width=250}
+-------------------------------------
+```{r input_NERRs}  
+renderUI({
+  shiny::req(!is.null(rv$DataSET))
+  checkboxGroupInput("sel_export_parks",
+    label = "Include data for these Parks: ",
+    choices = sort(unique(rv$DataSET$park_code)),
+    selected = sort(unique(rv$DataSET$park_code))
+    )
+  })
+
+downloadLink("button_exportNERRs", label = "Export SET data for NERRs")
+```
+
+Data for NERRs - Outputs
+-------------------------------------
+
+### Data Formatted for NERRs
+
+<font size="3">**This table shows SET data formatted for use with the NERRS SET Shiny app.**</font>
+
+* Use the left-side panel to select Parks of interest, then click the blue hyperlink 'Export SET data for NERRs' to save a .csv file that can be imported into the NERRs app.
+
+####
+```{r NERRs}
+
+output$out_NERRs <- DT::renderDT({
+  FuncOrderCheck(import = TRUE, examine = FALSE)
+  shiny::req(!is.null(rv$DataSET_NERRs))
+  temp_NERRs <- DT::datatable(
+    rv$DataSET_NERRs,
+    filter = "top",
+    rownames = FALSE,
+    options = list(
+      columnDefs = list(list(className = "dt-center", targets = "_all"))))
+})
+
+DTOutput("out_NERRs")
+tags$style("#out_NERRs{height:100vh;overflow-x:scroll;overflow-y:scroll}")
+```
