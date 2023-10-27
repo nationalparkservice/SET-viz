@@ -43,7 +43,7 @@ pkgs <- c("flexdashboard",
               "lubridate", 
               "here", 
               "httr", # use web services
-              "rgdal", # to use readOGR
+              "sf", # replace rgdal
               "sp", # transform projections
               "purrr", # for applying functions to dplyr groups
               "dataMaid", # for data checks
@@ -51,7 +51,6 @@ pkgs <- c("flexdashboard",
               "RColorBrewer", # to display brewer palettes
               "shinyjs", # for easy functions that use JavaScript
               "stringr", # to detect text snippets
-              "tmaptools", # for flexible color mapping
               "reactable",
               "data.table", # for fast lag calcs
               "DT", # for interactive tables
@@ -189,9 +188,11 @@ FuncParkBoundaries <- function(park_vec) {
      shiny::req(httr::http_status(GET(unitBoundaryURL))$category=="Success")
 
     tempUnitOutput <- "tempUnit.geojson"
-    download.file(unitBoundaryURL, tempUnitOutput) # readOGR geoJSON driver needs dsn to be a local file, so download the file first, then read it
+    # download.file(unitBoundaryURL, tempUnitOutput) # readOGR geoJSON driver needs dsn to be a local file, so download the file first, then read it
 
-    imported_dat <- tryCatch(rgdal::readOGR(dsn = tempUnitOutput, dropNULLGeometries = FALSE), error=function(e) print("Error retrieving data")) # return error message if problems still arise with downloading from web services
+    # st_read("path_to_file.shp", promote_to_multi = FALSE)
+    # https://r-spatial.org/r/2022/04/12/evolution.html
+    imported_dat <- tryCatch(sf::read_sf(tempUnitOutput, stringsAsFactors = TRUE), error=function(e) print("Error retrieving data")) # return error message if problems still arise with downloading from web services
     if(class(imported_dat)!="SpatialPolygonsDataFrame") {
        showModal(
          urlModal(unitBoundaryURL, title = "Data Retrieval Error", subtitle = paste0("Could not successfully retrieve park_name unit boundary data from IRMA. To see if this is a problem with the web service (and not the dashboard), enter the above URL in a browser and see if data successfully downloads with boundary information in geojson format. If necessary, email IRMA support (irma@nps.gov) for assistance."))
@@ -199,11 +200,11 @@ FuncParkBoundaries <- function(park_vec) {
     }
 
     shiny::req(class(imported_dat)=="SpatialPolygonsDataFrame")
-    imported_dat <- sp::spTransform(imported_dat, sp::CRS("+proj=longlat +datum=WGS84")) # convert to WGS84
+    imported_dat <- sf::st_transform(imported_dat, sp::CRS("+proj=longlat +datum=WGS84")) # convert to WGS84 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
     rv$UnitPoly <- imported_dat
     rm(imported_dat)
-    unlink("tempUnit.geojson")
+    # unlink("tempUnit.geojson")
 }
 
 FuncCalcChange <- function(dat) {
@@ -975,8 +976,9 @@ observeEvent(eventExpr = input$button_CancelModal, {
 
 # (Home) Import and format data via SQL database download ----
 observeEvent(eventExpr = input$button_ImportSQL, {
+
   shiny::validate(need(!is.null(input$database_driver), message = "Enter a valid SQL Driver"))
-  shiny::validate(need(grepl("SQL", input$database_server), message = "Enter a valid SQL Database Server"))
+  # shiny::validate(need(grepl("SQL", input$database_server), message = "Enter a valid SQL Database Server"))
   shiny::validate(need(!is.null(input$network_code), message = "Select at least one network"))
   options(useFancyQuotes = FALSE)
   network_code <- paste(sQuote(input$network_code), collapse = ",")
@@ -990,7 +992,7 @@ observeEvent(eventExpr = input$button_ImportSQL, {
         cat("line987")
         con <- DBI::dbConnect(odbc::odbc(),
                       Driver =  input$database_driver,
-                      Server = input$database_server, #"INP2300SQL01\ntwk",
+                      Server = input$database_server, #INP2300irmadb01\ntwk (04 dev),
                       Database = "SET",
                       Trusted_Connection = "Yes",
                       Port = 1433)
@@ -1570,9 +1572,9 @@ Inputs {.sidebar data-width=300}
     renderUI({
       cat("line1577")
       shiny::req(!is.null(rv$DataSET), !is.null(input$sel_Park))
-      cat("HAVE SEL_PARK")
-            saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-  saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+  #     cat("HAVE SEL_PARK")
+  #           saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+  # saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
       cat("line1578")
       sliderInput(
         "sel_YrRange",
