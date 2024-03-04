@@ -1503,7 +1503,7 @@ textInput("database_driver", "Enter your SQL DRIVER: ",
 ```{r}
 textInput("database_server", "Enter the SQL DATABASE SERVER: ",
                   placeholder = NULL,
-                  value = ""
+                  value = "INP2300irmadb01\\ntwk"
                   )
 ```
 
