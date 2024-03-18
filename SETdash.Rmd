@@ -100,7 +100,7 @@ vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
 rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_HeatMetric = NULL, sel_YrRange = NULL, PinHeatPlots = NULL, PinPieMatrix = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
-thresh3_levels = c("big decline", "within expected range", "big increase", "N/A")
+thresh3_levels = c("big decline", "no large changes", "big increase", "N/A")
 
 ```
 
@@ -318,16 +318,16 @@ FuncCalcQuant <- function(dat) {
   if(rv$sel_HeatMetric %in% c("change", "combined")) {
     dat2$level <- ifelse(
       dat2$diff_height_mm < dat2$lower_cutoff, "big decline", ifelse(
-      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "within expected range"))
+      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "no large changes"))
   }
   if(rv$sel_HeatMetric == "combined_base") {
     dat2$level <- ifelse(
       dat2$diff_height_base_mm < dat2$lower_cutoff, "big decline", ifelse(
-      dat2$diff_height_base_mm > dat2$upper_cutoff, "big increase", "within expected range"))
+      dat2$diff_height_base_mm > dat2$upper_cutoff, "big increase", "no large changes"))
   }
   
   dat2$GroupingVar <- NULL
-  dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase"))
+  dat2$level <- factor(dat2$level, levels = c("big decline", "no large changes", "big increase"))
 
   return(dat2)
   }
@@ -351,16 +351,16 @@ FuncCalcThresh <- function(dat) {
   if(rv$sel_HeatMetric %in% c("change", "combined")) {
   dat2$level <- ifelse(
       dat2$diff_height_mm < dat2$lower_cutoff, "big decline", ifelse(
-      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "within expected range"))
+      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "no large changes"))
   }
   
   if(rv$sel_HeatMetric == "combined_base") {
   dat2$level <- ifelse(
       dat2$diff_height_base_mm < dat2$lower_cutoff, "big decline", ifelse(
-      dat2$diff_height_base_mm > dat2$upper_cutoff, "big increase", "within expected range"))    
+      dat2$diff_height_base_mm > dat2$upper_cutoff, "big increase", "no large changes"))    
   }
   
-  dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase"))
+  dat2$level <- factor(dat2$level, levels = c("big decline", "no large changes", "big increase"))
   return(dat2)
 }
 
@@ -677,7 +677,7 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
         dat2 %<>% dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]"))
       }
     
-    dat2$level <- factor(dat2$level, levels = c("big decline", "within expected range", "big increase", "N/A"))
+    dat2$level <- factor(dat2$level, levels = c("big decline", "no large changes", "big increase", "N/A"))
     
     dat2$level[is.na(dat2$level)] <-"N/A" # this is necessary so heatmap will still work even if no data 
 
@@ -904,7 +904,7 @@ FuncPlotlyPieMatrix <- function(dat, discrete_cols = thresh3_cols, discrete_leve
   yref = "container",
   yanchor = "center",
   xanchor = "center",
-  font =list(size = 14),
+  font =list(size = ifelse(length(date_vec)<3, 12, 14)),
   align = "right",
   x = date_seq_px,
   y = dates_loc_bottom,
@@ -951,7 +951,7 @@ FuncPlotlyPieMatrix <- function(dat, discrete_cols = thresh3_cols, discrete_leve
   
   
   fig_final <- fig_final %>% layout(
-    title = "Pie Charts (each row is a Station, each column is a Survey Event)", 
+    title = "(Row = Station; Column = Survey Date)", 
     showlegend = FALSE,
     grid=list(
       rows=length(unique(dat$station_name)),
@@ -1275,6 +1275,9 @@ dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
 observeEvent(eventExpr = input$button_RecalcPinHeights, { 
 
   shiny::req(!is.null(rv$SubDataSET), !is.null(input$sel_PinSite),  !is.null(input$sel_ThresholdType))
+  
+  saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
+saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
 
   withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
     cat("line766")
@@ -1324,15 +1327,17 @@ cat("line1034")
     
     # Create map
     shiny::req(!is.null(rv$ThreshCounts), !is.null(rv$DataStation))
+
     rv$MapDat <- rv$ThreshCounts %>%
       dplyr::ungroup() %>%
-      dplyr::select(site_name, station_name, event_date_UTC, lower_cutoff, upper_cutoff, level, N) 
-    first_survey <- min(rv$ThreshCounts$event_date_UTC, na.rm = TRUE)
-    rv$MapDat %<>%
-      dplyr::filter(event_date_UTC != first_survey) %>% # First Sampling date is all NA's so omit. This is more steps than should be necessary, but didn't seem to work all the time when piped
-      droplevels() %>%
+      dplyr::select(site_name, station_name, event_date_UTC, lower_cutoff, upper_cutoff, level, N) %>%
       spread(key = level, value = N, drop = FALSE, fill = 0) %>%
       left_join(unique(rv$DataStation[c("park_name", "park_code", "site_name", "station_name", "station_latitude", "station_longitude")]), by = c("site_name", "station_name"))
+    
+        first_date_data <- rv$MapDat %>% dplyr::mutate(sum_any_change = `big decline` + `no large changes` + `big increase`) %>% dplyr::filter(sum_any_change > 0) %>% pull(event_date_UTC) %>% min() # this is the first survey date with pin change data for at least one station
+        rv$MapDat %<>%
+          dplyr::filter(event_date_UTC >= first_date_data) %>%
+          droplevels()
     # })
   }) 
 })
@@ -2176,23 +2181,7 @@ renderUI({
   })
   ))
 
-br()
 
-hr()
-
-renderUI({
-  shiny::req(!is.null(rv$MapDat))
-  
-  map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$station_longitude, na.rm = TRUE), latrange = range(rv$MapDat$station_latitude, na.rm = TRUE)))
-  
-  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = map_zoom + 3, value = map_zoom - 1, step = 0.5, ticks = FALSE, dragRange = FALSE, width = "95%")
-})
-
-renderUI({
-  shiny::req(!is.null(rv$MapDat))
-  
-  sliderInput("sel_MapPieSize", label = "Resize map pie charts:", min = 10, max = 100, value = 60, step = 10, ticks = FALSE, dragRange = FALSE, width = "95%")
-})
 ```
 
 SET Pin Heights - Output {.tabset .tabset-fade}
@@ -2200,7 +2189,7 @@ SET Pin Heights - Output {.tabset .tabset-fade}
 
 ### Heat Plots
 
-<font size="3">**This heat map shows RAW SET PIN HEIGHTS and/or CHANGE IN RAW SET PIN HEIGHTS (since prior survey) for the selected site, color-coded to highlight large increases or declines. Red borders on heatmap cells indicate presence of selected alerts.**</font>
+<font size="3">**This heat map shows RAW SET PIN HEIGHTS and/or CHANGE IN RAW SET PIN HEIGHTS (since prior survey or since first survey) for the selected site, color-coded to highlight large increases or declines. Red borders on heatmap cells indicate presence of selected alerts.**</font>
 
 <span style="font-size:18px; color:red;">
     INTERACTIVE HEAT PLOTS ARE SLOW TO DRAW - PLEASE BE PATIENT 
@@ -2217,6 +2206,8 @@ SET Pin Heights - Output {.tabset .tabset-fade}
 ####
 ```{r heat_plots_input}
 # Some stations have much a much longer range of survey dates than others, and it's not easy to adjust individual width for vertically stacked subplots. So instead, user selects which station to view
+ 
+# >>>>>>>>>>> PICK UP FROM HERE. FOR EACH SUBPLOT, SHOW THE ARM (A,B,C,D) AND DIRECTION. CAN REMOVE STATION NAME B/C THAT IS ALREADY IN TITLE. SEE IF I CAN SHOW DATE (X-AXIS FOR EACH SUBPLOT)
 renderUI({
   shiny::req(!is.null(input$sel_Park), !is.null(rv$SubDataSET), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite))
   shiny::req(rv$sel_PinSite == input$sel_PinSite)
@@ -2271,7 +2262,7 @@ renderUI({
                      "combined" = "CHANGE in SET pin heights [SET pin heights are in brackets]",
                      "combined_base" = "CHANGE in SET pin heights from first survey [SET pin heights are in brackets]")
   yr_range <- rv$PinHeatDataSET %>% dplyr::filter(station_code == input$sel_StationCode) %>% pull(event_date_yr) %>% range()
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " ", input$sel_StationCode, " (Yrs ", yr_range[1], "-", yr_range[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text, "</text></center><br>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " ", input$sel_StationCode, " (Yrs ", yr_range[1], "-", yr_range[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text,  "</text><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length; # of days btwn. surveys may differ greatly</text></center>")) )
   })
 
 renderPlotly({ # separate validation statements so they are checked in sequence
@@ -2282,8 +2273,7 @@ renderPlotly({ # separate validation statements so they are checked in sequence
 shiny::validate(need(all(unique(rv$PinHeatDataSET$park_name)==input$sel_Park, rv$sel_PinSite == input$sel_PinSite), message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
 
   shiny::req(input$sel_StationCode %in% unique(rv$PinHeatDataSET$station_code))
-#   saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-# saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+
   rv$PinHeatPlots <- FuncPlotlyMatrixPlot(dat = subset(rv$PinHeatDataSET, station_code == input$sel_StationCode), heat_metric = rv$sel_HeatMetric)
   
   shiny::validate(
@@ -2300,8 +2290,6 @@ cat("line1716")
 
 * Lines are color-coded by arm (direction).
 
-* Thick lines show linear trend for each arm.
-
 * Click on a POINT to highlight all lines for that SET arm.
 
 ####
@@ -2311,7 +2299,7 @@ renderUI({
     shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite))
   shiny::req(all(rv$sel_PinSite == input$sel_PinSite,  unique(rv$PinHeatDataSET$park_name)==input$sel_Park))
 
-    div(HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Trends in SET pin heights</text></center><br>")) )
+    div(HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Thick lines are least-squares lines fit to RAW data for each SET arm</text><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length</text></center>")) )
   })
 
 renderPlotly({
@@ -2390,7 +2378,7 @@ renderUI({
 
   shiny::req(unique(rv$PinHeatDataSET$site_name) == input$sel_PinSite, unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
 
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", unique(rv$PinHeatDataSET$site_name), " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>% of Station-Survey data in each pin height change category</text></center><br>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", unique(rv$PinHeatDataSET$site_name), " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>% of Station-Survey data in each pin height change category</text></center><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length; # of days btwn. surveys may differ greatly</text></center>")) )
   })
 
 renderPlot({
@@ -2435,13 +2423,29 @@ plotlyOutput('out_PieCharts', height="100%", width = "100%")
 
 ### Maps
 
-<font size="3">**This map shows the CHANGE IN SET PIN HEIGHTS pie charts overlaid on a map of the selected site.**</font>
-
-* Use the left-side panel to control map zoom and pie chart sizes.
-
-* Use the time slider (bottom right of map) to select a particular survey event or to play a time lapse of the data.
+<font size="3">**This map shows the CHANGE IN SET PIN HEIGHTS  (i.e., change in SET pin heights since prior survey) as pie charts overlaid on a map of the selected site.**</font>
 
 ####
+```{r}
+splitLayout(
+    cellWidths = c("60%", "40%"),
+
+renderUI({
+  shiny::req(!is.null(rv$MapDat))
+  
+  map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$station_longitude, na.rm = TRUE), latrange = range(rv$MapDat$station_latitude, na.rm = TRUE)))
+  
+  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = map_zoom + 3, value = map_zoom - 1, step = 0.5, ticks = FALSE, dragRange = FALSE, width = "95%")
+}),
+
+renderUI({
+  shiny::req(!is.null(rv$MapDat))
+  
+  sliderInput("sel_MapPieSize", label = "Resize map pie charts:", min = 10, max = 100, value = 60, step = 10, ticks = FALSE, dragRange = FALSE, width = "95%")
+})
+)
+```
+
 ```{r thresh_map}
 renderUI({
     shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
@@ -2481,8 +2485,8 @@ output$out_ThreshMap <- renderLeaflet({
   thresh_map
   })
 
-tags$style("#out_ThreshMap {height: calc(90vh - 100px) !important;}")
-leafletOutput('out_ThreshMap', height="90%", width = "95%")
+tags$style("#out_ThreshMap {height: calc(75vh - 100px) !important;}")
+leafletOutput('out_ThreshMap', height="75%", width = "95%")
 ```
 
 Marker Horizon Data
