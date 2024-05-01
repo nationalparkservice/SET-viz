@@ -134,6 +134,16 @@ tag.map.title <- tags$style(HTML("
     font-size: 28px;
   }
 ")) # add title to leaflet map
+
+# Show data tables at full height
+tags$style(".datatables.html-widget.html-widget-static-bound { 
+  height: auto !important;
+  width: 90vw !important;
+}")
+
+tags$style(".dataTables_scrollBody {
+  height: unset !important;
+}")
 ```
 
 ```{r functions}
@@ -491,8 +501,8 @@ FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess
 }
 
 FuncSubplotMargins <- function(tot_page, num_subplots, left_prop = 0, right_prop = 0, top_prop = 0.1, bottom_prop = 0.1) {
-  adj_top = ifelse(tot_page > 400, top_prop/num_subplots, .06) # need to divide so as number of plots increases, the space between plots doesn't get huge
-  adj_bottom = ifelse(tot_page > 400, bottom_prop/num_subplots, .06)
+  adj_top = ifelse(tot_page > 400, top_prop/num_subplots, .045) # need to divide so as number of plots increases, the space between plots doesn't get huge
+  adj_bottom = ifelse(tot_page > 400, bottom_prop/num_subplots, .045)
   
   marg_lost <- adj_top + adj_bottom
   indiv <- 1/num_subplots
@@ -534,7 +544,7 @@ FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_level
     dplyr::summarize(n_cores = length(unique(core_measurement_number))) # for each MH, how many cores are there?
     
   # total_page_ht <- max(64 + nrow(temp_distinct) * (30*mean(temp_distinct$n_cores)), 300)
-  total_page_ht <- max(100 + 30*sum(temp_distinct$n_cores), 350) # <<<<<<<<<<<<<<<<<<<<<<
+  total_page_ht <- max(100 + 30*sum(temp_distinct$n_cores), 320) # <<<<<<<<<<<<<<<<<<<<<<
   cat("line523")
   incProgress(1/2, detail = "...creating subplots")    # MH for this station
   num_subplots <- length(unique(subdat$marker_horizon_name))
@@ -638,8 +648,8 @@ FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_level
         ) %>%
       add_annotations( # Station name as title
         x = 0.5,
-        y = 1.1,
-        text = paste0("Marker horizon data (averaged across cores) for ", unique(subdat$station_name)),
+        y = 1 + (30/total_page_ht), #1.1,
+        text = paste0("Marker horizon data for ", unique(subdat$station_name)),
         showarrow = F,
         xref="paper",
         yref="paper",
@@ -806,8 +816,8 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
         ) %>%
       add_annotations( # Station name as title
         x = 0.5,
-        y = 1.02,
-        text = paste0("<br><br>SET pin data (uncorrected for pin length) for ", unique(subdat$station_name),"<br><br>"),
+        y = 1.025,
+        text = paste0("<br><br>SET pin data (uncorrected for pin length) for ", unique(subdat$station_name)),
         showarrow = F,
         xref="paper",
         yref="paper",
@@ -1243,10 +1253,10 @@ withProgress(message = "Just a moment", detail = "...generating data check repor
   
   if(input$sel_Pin_or_MH == "pin") {
     check_sub <- rv$SubDataSET %>%
-      dplyr::select(-record_ID, -pin_flag_notes, -vegetation_notes, -SET_direction_notes, -SET_notes, -dpl_note)
+      dplyr::select(-record_ID, -pin_flag_notes, -vegetation_notes, -SET_direction_notes, -SET_notes, -dpl_note, -event_date_mnth, -event_date_wk, -SET_reader_transition, -pin_collection_transition, -diff_days_base)
   } else {
     check_sub <- rv$SubDataMarker %>%
-      dplyr::select(-record_ID, -marker_horizon_name, -core_measurement_number, -core_event_notes, -core_notes)
+      dplyr::select(-record_ID, -marker_horizon_name, -core_measurement_number, -core_event_notes, -core_notes, -event_date_mnth, -event_date_wk, -reader_change)
   }
     
     shiny::req(!is.null(check_sub))
@@ -1298,7 +1308,6 @@ cat("line1034")
     }
     cat("line978")
     
-    # Create line plots
     shiny::req(!is.null(rv$PinHeatDataSET))
 
     incProgress(1/3, detail = paste0("...creating pie charts"))
@@ -1331,15 +1340,15 @@ cat("line1034")
         rv$MapDat %<>%
           dplyr::filter(event_date_UTC >= first_date_data) %>%
           droplevels()
-    # })
+        
   }) # end progress
 })
 
 # (Markers) Update Summaries ----
 observeEvent(eventExpr = input$button_RecalcMH, { 
 shiny::req(!is.null(rv$SubDataMarker), !is.null(input$sel_MHSite))
-  # shiny::req(!is.null(rv$SubDataMarker), !is.null(input$sel_MHSite), !is.null(input$sel_MHAlerts), !is.null(input$sel_MHReaderAlert))
-  # withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
+
+  withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
     cat("line766")
 
     # Create MH heat plots
@@ -1348,7 +1357,8 @@ shiny::req(!is.null(rv$SubDataMarker), !is.null(input$sel_MHSite))
     cat("line983")
     
     rv$sel_MHSite <- input$sel_MHSite
-  # }) 
+    Sys.sleep(0.5)
+  })
 })
 
 ```
@@ -1482,6 +1492,8 @@ cat("CREATE SUBDATASUMMARY")
    
   shiny::req(!is.null(rv$SubDataDateMarkerSummary))
   shiny::req(nrow(rv$SubDataDateMarkerSummary) > 0)
+  
+  rv$PinHeatDataSET <- rv$MarkerHeatDataSET <- NULL # Clear summaries
   
   Sys.sleep(0.5) # ADD THIS SLEEP TIME, OR WILL GENERATE ERROR WHEN ADVANCE TO NEXT PAGE (TOO QUICKLY?)
   })
@@ -2145,12 +2157,25 @@ renderUI({
                  min = 0.0,
                  max = 1.0,
                  step = 0.05),
-    numericInput("sel_QuantileUpper",
+    renderUI({
+      shiny::req(!is.null(input$sel_QuantileLower))
+      numericInput("sel_QuantileUpper",
                  label = strong("Enter upper quantile for pin height change (or 1 for no upper limit)"),
                  value = 0.9,
-                 min = 0.0,
+                 min = input$sel_QuantileLower,
                  max = 1.0,
-                 step = 0.05),
+                 step = 0.05)
+    }),
+    
+     # Generate bold, red warning if upper quantile is less than lower quantil
+tags$div(renderText({
+  shiny::req(all(!is.null(input$sel_ThresholdType), !is.null(input$sel_QuantileLower), !is.null(input$sel_QuantileUpper), input$sel_ThresholdType == "quant"))
+  
+  if(input$sel_QuantileUpper <= input$sel_QuantileLower) {
+    paste0("WARNING!! Upper quantile limit should be HIGHER than lower quantile limit.")
+  }
+  
+}), style = "font-size:14px; font-weight:bold; color:red;"),
     
     radioButtons("sel_QuantileGroup",
                label = strong("Calculate quantiles:"),
@@ -2166,11 +2191,15 @@ renderUI({
   conditionalPanel(
     condition = "(input.sel_ThresholdType == 'numb')",
     numericInput("sel_ThresholdLower",
-                 label = "Enter lower limit",
+                 label = strong("Enter lower limit"),
+                 max = 0,
                  value = -20),
-    numericInput("sel_ThresholdUpper",
-                 label = "Enter upper limit",
+   
+      numericInput("sel_ThresholdUpper",
+                 label = strong("Enter upper limit"),
+                 min = 0,
                  value = 20)
+    
     )
   })
   ))
@@ -2183,7 +2212,7 @@ SET Pin Heights - Output {.tabset .tabset-fade}
 
 ### Heat Plots
 
-<font size="3">**This heat map shows RAW SET PIN HEIGHTS and/or CHANGE IN RAW SET PIN HEIGHTS (since prior survey or since first survey) for the selected site, color-coded to highlight large increases or declines. Red borders on heatmap cells indicate presence of selected alerts.**</font>
+<font size="3">**This heat map shows RAW SET PIN HEIGHTS and/or CHANGE IN RAW SET PIN HEIGHTS (since PRIOR survey or since FIRST survey) for the selected site, color-coded to highlight large increases or declines. Red borders on heatmap cells indicate presence of selected alerts.**</font>
 
 <span style="font-size:18px; color:red;">
     INTERACTIVE HEAT PLOTS ARE SLOW TO DRAW - PLEASE BE PATIENT 
@@ -2228,10 +2257,11 @@ renderUI({
   cap_text <- switch(rv$sel_HeatMetric,
                      "raw" = "SET pin heights",
                      "change" = "CHANGE in SET pin heights",
-                     "combined" = "CHANGE in SET pin heights [SET pin heights are in brackets]",
-                     "combined_base" = "CHANGE in SET pin heights from first survey [SET pin heights are in brackets]")
+                     "combined" = "CHANGE in SET pin heights from PRIOR survey [SET pin heights are in brackets]",
+                     "combined_base" = "CHANGE in SET pin heights from FIRST survey [SET pin heights are in brackets]")
+  
   yr_range <- rv$PinHeatDataSET %>% dplyr::filter(station_code == input$sel_StationCode) %>% pull(event_date_yr) %>% range()
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " ", input$sel_StationCode, " (Yrs ", yr_range[1], "-", yr_range[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text,  "</text><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length. ALSO, # of days btwn. surveys may differ greatly</text></center>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " ", input$sel_StationCode, " (Yrs ", yr_range[1], "-", yr_range[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text,  "</text><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length; # of days btwn. surveys may differ greatly</center></text>")) )
   })
 
 renderPlot({
@@ -2239,12 +2269,15 @@ renderPlot({
   shiny::req(input$sel_StationCode %in% unique(rv$PinHeatDataSET$station_code))
   
   if(all(unique(rv$PinHeatDataSET$park_name)==input$sel_Park, rv$sel_PinSite == input$sel_PinSite)) { # plot should turn blank if user has selected another park or site and this figure has not updated to reflect that change
+    legend_text <- switch(rv$sel_HeatMetric,
+                        "combined" = "CHANGE in SET pin heights from PRIOR survey ",
+                        "combined_base" = "CHANGE in SET pin heights from FIRST survey ")
    # hacky legend because plotly heatmaps can't generate horizontal colorbars
   heat_legend <- grid.arrange(ggpubr::as_ggplot(
     get_legend(
       ggplot(rv$PinHeatDataSET, aes(x = event_date_UTC, y = pin_position, fill = level)) +
         geom_tile() + 
-        scale_fill_manual(values = thresh3_cols, labels = thresh3_levels, na.translate = FALSE, drop = FALSE, name = "Change in SET Pin Height (since prior survey):   ") + 
+        scale_fill_manual(values = thresh3_cols, labels = thresh3_levels, na.translate = FALSE, drop = FALSE, name = legend_text) + 
         theme(legend.position = "top",
               legend.key.width = unit(1, "cm"),
               legend.text = element_text(size = 16, margin = margin(r = 2, unit = "cm")),
@@ -2257,7 +2290,7 @@ renderPlot({
   
   }, height = 60)
 
-renderPlotly({ # separate validation statements so they are checked in sequence
+output$out_PinHeat <- renderPlotly({ # separate validation statements so they are checked in sequence
   FuncOrderCheck(import = TRUE, examine = TRUE)
 cat("line2237")
   shiny::validate(need(all(!is.null(input$sel_Park), !is.null(input$sel_StationCode), !is.null(rv$PinHeatDataSET)), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
@@ -2274,11 +2307,13 @@ cat("line1716")
 
   rv$PinHeatPlots
 })
+
+plotlyOutput('out_PinHeat', height="100%", width = "100%")
 ```
 
 ### Line Plots
 
-<font size="3">**These line plots show SET PIN HEIGHTS over time for the selected site.**</font>
+<font size="3">**These line plots show RAW SET PIN HEIGHTS (NOT adjusted for pin length) over time for the selected site.**</font>
 
 * Lines are color-coded by arm (direction).
 
@@ -2361,7 +2396,7 @@ renderPlotly({
 
 ### Pie Charts
 
-<font size="3">**These pie charts show large increases or declines in SET pin heights (i.e., change in SET pin heights since prior survey) as % of the data for a survey event.**</font>
+<font size="3">**These pie charts show large increases or declines in SET pin heights (i.e., change in SET pin heights since PRIOR survey or since FIRST survey) as % of the data for a survey event.**</font>
 
 ####
 ```{r pie_charts}
@@ -2372,12 +2407,11 @@ renderUI({
 
   shiny::req(unique(rv$PinHeatDataSET$site_name) == input$sel_PinSite, unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
 
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", unique(rv$PinHeatDataSET$site_name), " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>% of Station-Survey data in each pin height change category</text></center><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length. ALSO, # of days btwn. surveys may differ greatly</text></center>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", unique(rv$PinHeatDataSET$site_name), " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>% of Station-Survey data in each pin height change category</text><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length; # of days btwn. surveys may differ greatly</text></center>")) )
   })
 
 renderPlot({
   shiny::req(!is.null(input$sel_Park), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite), !is.null(rv$PinPieMatrix), !is.null(rv$PinHeatDataSET))
-
   
     if(all(rv$sel_PinSite == input$sel_PinSite,  unique(rv$PinHeatDataSET$park_name)==input$sel_Park)) { # plot should turn blank if user has selected another park and this figure has not updated to reflect that change
   # hacky legend because plotly heatmaps can't generate horizontal colorbars
@@ -2418,7 +2452,7 @@ plotlyOutput('out_PieCharts', height="100%", width = "100%")
 
 ### Maps
 
-<font size="3">**This map shows the CHANGE IN SET PIN HEIGHTS  (i.e., change in SET pin heights since prior survey) as pie charts overlaid on a map of the selected site.**</font>
+<font size="3">**This map shows the CHANGE IN SET PIN HEIGHTS  (i.e., change in SET pin heights since PRIOR survey or since FIRST survey) as pie charts overlaid on a map of the selected site.**</font>
 
 ####
 ```{r}
@@ -2430,7 +2464,7 @@ renderUI({
   
   map_zoom <- min(RgoogleMaps::MaxZoom(lonrange = range(rv$MapDat$station_longitude, na.rm = TRUE), latrange = range(rv$MapDat$station_latitude, na.rm = TRUE)))
   
-  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 3, max = map_zoom + 3, value = map_zoom - 1, step = 0.5, ticks = FALSE, dragRange = FALSE, width = "95%")
+  sliderInput("sel_MapZoom", label = "Set map zoom (smaller = wider view):", min = map_zoom - 6, max = map_zoom + 6, value = map_zoom - 1, step = 1, ticks = FALSE, dragRange = FALSE, width = "95%")
 }),
 
 renderUI({
@@ -2446,7 +2480,7 @@ renderUI({
     shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET))
   shiny::req(rv$sel_PinSite %in% unique(rv$SubDataSET$site_name), unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
 
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Time lapse map showing % of data in each SET pin height change category, by Station</text></center><br>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text></center><br><center><text style='color:blue; font-size:18px;'>Time lapse map showing % of data in each SET pin height change category, by Station</text></center><br>")) )
   })
 
 output$out_ThreshMap <- renderLeaflet({
@@ -2545,7 +2579,7 @@ Marker Horizon Data - Output {.tabset .tabset-fade}
 
 ### Heat Plots
 
-<font size="3">**This heatmap shows AVERAGE MARKER HORIZON DEPTH for the selected site, color-coded to show selected alerts.**</font>
+<font size="3">**This heatmap shows MARKER HORIZON DEPTHS for the selected site, color-coded to show selected alerts.**</font>
 
 <span style="font-size:18px; color:red;">
     INTERACTIVE HEAT PLOTS ARE SLOW TO DRAW - PLEASE BE PATIENT 
@@ -2586,7 +2620,7 @@ renderUI({
     shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET), !is.null(rv$sel_MHSite), !is.null(rv$SubDataSET))
   shiny::req(rv$sel_MHSite %in% unique(rv$SubDataSET$site_name), unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park)
 
-    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values shown are average marker horizon depth per core ID</text></center><br>")) )
+    div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", input$sel_YrRange[1], "-", input$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Values shown are marker horizon depth per core ID</center></text><br>")) )
   })
 
 renderPlotly({ # separate validation statements so they are checked in sequence
@@ -2597,8 +2631,7 @@ renderPlotly({ # separate validation statements so they are checked in sequence
   shiny::req(!is.null(input$sel_Park))
 shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
  shiny::req(!is.null(input$sel_MHStationCode))
-#   saveRDS(isolate(reactiveValuesToList(rv)), "TEMP_rv.RDS")
-# saveRDS(isolate(reactiveValuesToList(input)), "TEMP_input.RDS")
+
     rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = subset(rv$MarkerHeatDataSET, station_code == input$sel_MHStationCode), heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
 
     shiny::req(!is.null(rv$RawMHHeatPlots))
