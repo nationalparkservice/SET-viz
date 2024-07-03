@@ -90,7 +90,7 @@ options(shiny.maxRequestSize = 20*1024^2,
 
 ```{r startup}
 
-rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_HeatMetric = NULL, sel_YrRange = NULL, PinHeatPlots = NULL, PinPieMatrix = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
+rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_HeatMetric = NULL, sel_DiffFromBase = NULL, sel_YrRange = NULL, PinHeatPlots = NULL, PinPieMatrix = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 thresh3_cols = c("#ffd700", "#add8e6", "#ffa500", "#ffffff")
 thresh3_levels = c("big decline", "no large changes", "big increase", "N/A")
@@ -223,16 +223,18 @@ FuncCalcChange <- function(dat) {
   
   dt1 <- dat %>%
     dplyr::filter(observation_type == "Standard") %>%
-    dplyr::select(record_ID, park_code, site_name, station_name, station_code, SET_direction_azimuth, pin_position, event_date_UTC, pin_height_mm, SET_reader, SET_instrument, pin_collection) %>%
+    dplyr::select(record_ID, park_code, site_name, station_name, station_code, SET_direction_azimuth, pin_position, event_date_UTC, pin_height_mm, standardized_soil_elev_mm, soil_elev_m, SET_reader, SET_instrument, pin_collection) %>%
     dplyr::arrange(event_date_UTC)
   
   dt2 = data.table(dt1 %>% dplyr::select(-record_ID))
-  dt2[, c("event_date_UTC_lag", "pin_height_mm_lag", "SET_reader_lag", "SET_instrument_lag", "pin_collection_lag") := shift(.SD, 1), by=c("park_code", "site_name", "station_name", "station_code", "SET_direction_azimuth", "pin_position")] # lag calculations
+  dt2[, c("event_date_UTC_lag", "pin_height_mm_lag", "standardized_soil_elev_mm_lag", "soil_elev_m_lag", "SET_reader_lag", "SET_instrument_lag", "pin_collection_lag") := shift(.SD, 1), by=c("park_code", "site_name", "station_name", "station_code", "SET_direction_azimuth", "pin_position")] # lag calculations
   dt3 <- dplyr::bind_cols(dt1["record_ID"], as.data.frame(dt2)) %>%
-    dplyr::select(record_ID, event_date_UTC_lag, pin_height_mm_lag, SET_reader_lag, SET_instrument_lag, pin_collection_lag) %>%
+    dplyr::select(record_ID, event_date_UTC_lag, pin_height_mm_lag, standardized_soil_elev_mm_lag, soil_elev_m_lag, SET_reader_lag, SET_instrument_lag, pin_collection_lag) %>%
     dplyr::right_join(dat, by = "record_ID") %>%
       dplyr::mutate(
-        diff_height_mm = pin_height_mm - pin_height_mm_lag,
+        diff_pin_height_mm = pin_height_mm - pin_height_mm_lag,
+        diff_standardized_soil_elev_mm = standardized_soil_elev_mm - standardized_soil_elev_mm_lag,
+        diff_soil_elev_m = soil_elev_m - soil_elev_m_lag,
         diff_days = event_date_UTC - event_date_UTC_lag,
         SET_reader_change = SET_reader!=SET_reader_lag,
         SET_reader_transition = ifelse(SET_reader_change, paste0("[", event_date_UTC_lag, "] ", SET_reader_lag, " -->", " [", event_date_UTC, "] ", SET_reader), NA),
@@ -240,19 +242,21 @@ FuncCalcChange <- function(dat) {
         SET_instrument_transition = ifelse(SET_instrument_change, paste0("[", event_date_UTC_lag, "] ", SET_instrument_lag, " -->", " [", event_date_UTC, "] ", SET_instrument), NA),
         pin_collection_change = pin_collection!=pin_collection_lag,
         pin_collection_transition = ifelse(pin_collection_change, paste0("[", event_date_UTC_lag, "] ", pin_collection_lag, " -->", " [", event_date_UTC, "] ", pin_collection), NA),) %>%
-    dplyr::select(-event_date_UTC_lag, -pin_height_mm_lag, - SET_reader_lag, -SET_instrument_lag, -pin_collection_lag) %>%
+    dplyr::select(-event_date_UTC_lag, -pin_height_mm_lag, -standardized_soil_elev_mm_lag, -soil_elev_m_lag, -SET_reader_lag, -SET_instrument_lag, -pin_collection_lag) %>%
     dplyr::ungroup()
   
   # Calculate differences from initial survey event
   init_surveys <- dt1 %>%
     dplyr::group_by(park_code, site_name, station_name, station_code) %>% 
    slice_min(order_by = event_date_UTC) %>%
-    dplyr::select(park_code, site_name, station_name, station_code, SET_direction_azimuth, pin_position, first_event_date_UTC = event_date_UTC, first_pin_height_mm = pin_height_mm)
+    dplyr::select(park_code, site_name, station_name, station_code, SET_direction_azimuth, pin_position, first_event_date_UTC = event_date_UTC, first_pin_height_mm = pin_height_mm, first_standardized_soil_elev_mm = standardized_soil_elev_mm, first_soil_elev_m = soil_elev_m)
   
   dt3 %<>%
     dplyr::left_join(init_surveys, by = c("park_code", "site_name", "station_name", "station_code", "SET_direction_azimuth", "pin_position")) %>%
     dplyr::mutate(
       diff_height_base_mm = pin_height_mm - first_pin_height_mm,
+      diff_standardized_soil_elev_base_mm = standardized_soil_elev_mm - first_standardized_soil_elev_mm,
+      diff_soil_elev_base_m = soil_elev_m - first_soil_elev_m,
       diff_days_base = event_date_UTC - first_event_date_UTC
     )
   
@@ -271,7 +275,9 @@ FuncCalcPinAlert <- function(dat, event_level_dat) {
   #
   cat("line252")
   dat2 <- dat %>%
-    # dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, observation_type, pin_position, pin_height_mm, dpl, dpl_note, pin_flag_label, pin_flag_notes, vegetation_notes, SET_notes, exclude_int_reason_ID, exclude_int_reason, exclude_cumul_reason_ID, exclude_cumul_reason, SET_reader_change, SET_reader_transition, SET_instrument_change, SET_instrument_transition, pin_collection_change, pin_collection_transition) %>%
+    dplyr::mutate(
+      sel_metric = get(rv$sel_HeatMetric),
+      sel_diff_metric = get(paste0("diff_", rv$sel_HeatMetric))) %>%
     dplyr::left_join(event_level_dat, by = c("station_name", "event_date_UTC")) %>%
     dplyr::mutate(
       dpl_alert = if("dpl_alert" %in% input$sel_PinAlerts) {ifelse(dpl != "Accepted", TRUE, FALSE)} else {FALSE},
@@ -294,13 +300,13 @@ cat("line319")
 }
 
 FuncCalcQuant <- function(dat) {
-  # Function to classify diff_height_mm by user-specified groups and quantiles
+  # Function to classify diff_pin_height_mm by user-specified groups and quantiles
   #
   # Args:
   #   dat:  A filtered SET data frame for the selected site
   #
   # Returns:
-  #   A data frame with an additional columns classifying diff_height_mm relative to specified quantiles per group
+  #   A data frame with an additional columns classifying diff_pin_height_mm relative to specified quantiles per group
   #
   dat <- droplevels(dat)
 
@@ -310,7 +316,7 @@ FuncCalcQuant <- function(dat) {
                          "station" = station_name)) 
   quant_list <- dat %>%
     dplyr::group_by(GroupingVar) %>%
-  group_map(~ quantile(.x$diff_height_mm, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
+  group_map(~ quantile(.x$sel_diff_metric, probs = c(input$sel_QuantileLower, input$sel_QuantileUpper), na.rm = TRUE))
   quant_df <- data.frame(do.call("rbind", quant_list))
   names(quant_df) <- c("lower_cutoff", "upper_cutoff")
   quant_df$GroupingVar <- levels(dat$GroupingVar)
@@ -320,8 +326,8 @@ FuncCalcQuant <- function(dat) {
     dplyr::mutate(level = NA)
   if(rv$sel_HeatMetric %in% c("change", "combined")) {
     dat2$level <- ifelse(
-      dat2$diff_height_mm < dat2$lower_cutoff, "big decline", ifelse(
-      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "no large changes"))
+      dat2$diff_pin_height_mm < dat2$lower_cutoff, "big decline", ifelse(
+      dat2$diff_pin_height_mm > dat2$upper_cutoff, "big increase", "no large changes"))
   }
   if(rv$sel_HeatMetric == "combined_base") {
     dat2$level <- ifelse(
@@ -336,13 +342,13 @@ FuncCalcQuant <- function(dat) {
   }
 
 FuncCalcThresh <- function(dat) {
-  # Function to classify diff_height_mm or diff_height_base_mm by user-specified numeric thresholds
+  # Function to classify diff_pin_height_mm or diff_height_base_mm by user-specified numeric thresholds
   #
   # Args:
   #   dat:  A filtered SET data frame for the specified site
   #
   # Returns:
-  #   A data frame with an additional column classifying diff_height_mm relative to specified thresholds
+  #   A data frame with an additional column classifying diff_pin_height_mm relative to specified thresholds
   #
   dat <- droplevels(dat)
   dat2 <- dat
@@ -353,8 +359,8 @@ FuncCalcThresh <- function(dat) {
   
   if(rv$sel_HeatMetric %in% c("change", "combined")) {
   dat2$level <- ifelse(
-      dat2$diff_height_mm < dat2$lower_cutoff, "big decline", ifelse(
-      dat2$diff_height_mm > dat2$upper_cutoff, "big increase", "no large changes"))
+      dat2$diff_pin_height_mm < dat2$lower_cutoff, "big decline", ifelse(
+      dat2$diff_pin_height_mm > dat2$upper_cutoff, "big increase", "no large changes"))
   }
   
   if(rv$sel_HeatMetric == "combined_base") {
@@ -614,7 +620,7 @@ FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_level
 }
 
 FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols, discrete_levels = thresh3_levels) {
-  # Function to create plotly heatmaps of raw pin data or diff_height_mm or diff_base_height_mm, organized by station. Using plot_ly because ggplotly is too slow for interactive heat plots b/c it doesn't recognize the input as a heatmap and creates a scatterplot where each rectangle is drawn separately with all the necessary attributes. 
+  # Function to create plotly heatmaps of raw pin data or diff_pin_height_mm or diff_base_height_mm, organized by station. Using plot_ly because ggplotly is too slow for interactive heat plots b/c it doesn't recognize the input as a heatmap and creates a scatterplot where each rectangle is drawn separately with all the necessary attributes. 
   #
   # Args:
   #   dat:  A filtered SET data frame with raw pin data/change quantile/change threshold classification for a single site
@@ -630,14 +636,14 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
     subdat <- dat%>%
       ungroup() %>%
     dplyr::arrange(station_name, SET_direction, pin_position, event_date_UTC) %>%
-    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction, " (", SET_direction_azimuth, " degrees)"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", switch((heat_metric == "combined_base")+1, diff_height_mm, diff_height_base_mm), "<br>Days Diff: ", switch((heat_metric == "combined_base")+1, diff_days, diff_days_base), "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>SET Reader: ", SET_reader, "<br>Pin Collection: ", pin_collection, "<br>Pin Length: ", pin_length_mm, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
-      dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, diff_height_mm, diff_height_base_mm, diff_days, diff_days_base, lower_cutoff, upper_cutoff, level, hover_label, border_color) %>%
+    dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction, " (", SET_direction_azimuth, " degrees)"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>Pin Height (mm): ", pin_height_mm, "<br>Height Diff (mm): ", switch((heat_metric == "combined_base")+1, diff_pin_height_mm, diff_height_base_mm), "<br>Days Diff: ", switch((heat_metric == "combined_base")+1, diff_days, diff_days_base), "<br>Upper Cutoff: ", upper_cutoff, "<br>Lower Cutoff", lower_cutoff, "<br>SET Reader: ", SET_reader, "<br>Pin Collection: ", pin_collection, "<br>Pin Length: ", pin_length_mm, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), ""))) %>%
+      dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, pin_height_mm, observation_type, pin_position, diff_pin_height_mm, diff_height_base_mm, diff_days, diff_days_base, lower_cutoff, upper_cutoff, level, hover_label, border_color) %>%
       droplevels()
     
     if(heat_metric == "combined_base") { # for some reason, using ifelse within the mutate statement gives incorrect results
       subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_height_base_mm, "  [", pin_height_mm, "]")) # this is change since baseline, then change since last survey
     } else {
-        subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]")) # this is raw pin height, then change since last survey
+        subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_pin_height_mm, "   [", pin_height_mm, "]")) # this is raw pin height, then change since last survey
       }
     
     subdat$level <- factor(subdat$level, levels = c("big decline", "no large changes", "big increase", "N/A"))
@@ -664,14 +670,14 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
       template <- subdat_pipe %>%
       dplyr::select(pin_position, event_date_UTC) %>%
       expand(pin_position, event_date_UTC) %>%
-        left_join(subdat_pipe[c("SET_direction", "SET_direction_azimuth", "pin_position", "event_date_UTC", "pin_height_mm", "diff_height_mm", "diff_height_base_mm", "combined_change_height", "hover_label", "level", "border_color")], by = c("pin_position", "event_date_UTC")) %>%
+        left_join(subdat_pipe[c("SET_direction", "SET_direction_azimuth", "pin_position", "event_date_UTC", "pin_height_mm", "diff_pin_height_mm", "diff_height_base_mm", "combined_change_height", "hover_label", "level", "border_color")], by = c("pin_position", "event_date_UTC")) %>%
       dplyr::arrange(event_date_UTC, pin_position)
 
     
     txt <- matrix(pull(template, 
                        switch(heat_metric,
                               "raw" = pin_height_mm, 
-                              "change" = ifelse(heat_metric == "combined_base", diff_height_base_mm, diff_height_mm),
+                              "change" = ifelse(heat_metric == "combined_base", diff_height_base_mm, diff_pin_height_mm),
                               "combined" = combined_change_height,
                               "combined_base" = combined_change_height)),
                   nrow=length(unique(template$pin_position)))
@@ -1021,7 +1027,8 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
   
   # Class types for data columns
       factor_cols <- c("datum", "location_datum", "station_datum", "double_read_type", "dpl", "DPL", "network_code", "network_name", "observation_type", "park_code", "park_name", "pin_collection", "pin_flag_code", "pin_flag_label", "protected_status", "SET_instrument", "SET_reader", "SET_recorder", "site_name", "station_code", "station_name", "station_status", "validation_name", "validation_status", "exclude_int_user", "exclude_cumul_user", "reader_name", "core_type", "core_condition", "foot_present", "group_isretired", "marker_horizon_data_collected", "pin_data_collected", "double_read_pin_collected", "category_code", "category_label") # these variables have a relatively small set number of possible values
-    integer_cols <- c("SET_direction_azimuth", "SET_offset_mm", "pin_length_mm", "station_elev_m", "pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m", "exclude_int_user_ID", "exclude_int_reason_ID", "exclude_cumul_user_ID", "exclude_cumul_reason_ID", "inundation_level_cm", "core_measurement_number", "core_measurement_depth_mm", "pin_position") 
+    integer_cols <- c("SET_direction_azimuth", "SET_offset_mm", "pin_length_mm", "station_elev_m", "pin_height_mm", "standardized_soil_elev_mm", "exclude_int_user_ID", "exclude_int_reason_ID", "exclude_cumul_user_ID", "exclude_cumul_reason_ID", "inundation_level_cm", "core_measurement_number", "core_measurement_depth_mm", "pin_position") 
+    double_cols <- c("soil_elev_m")
   
   if(!dir.exists(file.path(here::here(), "Data_in"))) {
     dir.create(file.path(here::here(), "Data_in"))} # create a 'Data_in' subfolder if it doesn't exist
@@ -1065,6 +1072,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     temp_dat %<>%
       dplyr::mutate_at(vars(matches(factor_cols)), as.factor) %>% 
       dplyr::mutate_at(vars(matches(integer_cols)), as.integer) %>%
+      dplyr::mutate_at(vars(matches(double_cols)), as.double) %>%
       dplyr::mutate_at(vars(matches("_date")), base::as.Date)
     
     if("event_date_UTC" %in% names(temp_dat)) {
@@ -1175,14 +1183,18 @@ observeEvent(eventExpr = input$button_RecalcPinHeights, {
 
   withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
     cat("line766")
-
-    # Create raw pin heat plots
-    pin_heat_dat <- FuncCalcPinAlert(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_PinSite & observation_type == "Standard"), event_level_dat = dplyr::filter(rv$SubDataEvent, site_name == input$sel_PinSite) %>% dplyr::select(station_name, event_date_UTC, event_notes))
-cat("line1034")
     
     rv$sel_PinSite <- input$sel_PinSite
     rv$sel_HeatMetric <- input$sel_HeatMetric
     rv$sel_YrRange <- input$sel_YrRange
+    rv$sel_DiffFromBase <- input$sel_DiffFromBase
+
+    saveRDS(isolate(reactiveValuesToList(rv)), here::here("TEMP_rv.RDS"))
+    saveRDS(isolate(reactiveValuesToList(input)), here::here("TEMP_input.RDS"))
+    
+    # Create pin heat plots
+    pin_heat_dat <- FuncCalcPinAlert(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_PinSite & observation_type == "Standard"), event_level_dat = dplyr::filter(rv$SubDataEvent, site_name == input$sel_PinSite) %>% dplyr::select(station_name, event_date_UTC, event_notes))
+cat("line1034")
     
     cat("line766")
     
@@ -1759,15 +1771,25 @@ renderUI({
       })
 
 renderUI({
-      shiny::req(!is.null(rv$SubDataSET))
+  shiny::req(!is.null(rv$SubDataSET))
+
+  keep_choices <- c(length(unique(na.omit(rv$SubDataSET$pin_height_mm))) > 1,
+                    length(unique(na.omit(rv$SubDataSET$standardized_soil_elev_mm))) > 1,
+                    length(unique(na.omit(rv$SubDataSET$soil_elev_m))) > 1)
       radioButtons("sel_HeatMetric",
-                   label = strong("Text to show on heatmaps:"),
-                   choiceNames = list("Change in SET pin height [SET pin height]", "Change in SET pin height FROM START [SET pin height]"),
-                   choiceValues = list("combined", "combined_base"),
-                   # choiceNames = list("SET pin height", "Change in SET pin height", "Change in SET pin height [SET pin height]", "Change in SET pin height FROM START [SET pin height]"),
-                   # choiceValues = list("raw", "change", "combined", "combined_base"),
-                   selected = "combined")
+                   label = strong("SET data to show:"),
+                   choiceNames = list("Pin height", "Standardized pin height", "Orthometric height")[keep_choices],
+                   choiceValues = list("pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m")[keep_choices],
+                   selected = "pin_height_mm")
       })
+
+renderUI({
+      shiny::req(!is.null(rv$SubDataSET))
+      checkboxInput(
+        "sel_DiffFromBase",
+        label = strong("Subtract baseline (initial site survey) SET value"),
+        value = FALSE)
+   })
 
   wellPanel(
     id = "wp_PinHeights",
@@ -1907,13 +1929,15 @@ renderUI({
 ```{r heat}
 # Addressed the unequal widths issue by putting legend in same R chunk as the graph
 renderUI({
-  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET), !is.null(input$sel_StationCode), !is.null(rv$PinHeatPlots))
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET), !is.null(input$sel_StationCode), !is.null(rv$PinHeatPlots), !is.null(rv$sel_HeatMetric), !is.null(rv$sel_DiffFromBase))
   shiny::req(rv$sel_PinSite == input$sel_PinSite, unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
-  cap_text <- switch(rv$sel_HeatMetric,
-                     "raw" = "SET pin heights",
-                     "change" = "CHANGE in SET pin heights",
-                     "combined" = "CHANGE in SET pin heights from PRIOR survey [SET pin heights are in brackets]",
-                     "combined_base" = "CHANGE in SET pin heights from FIRST survey [SET pin heights are in brackets]")
+  cap_text <- case_when(
+    all(rv$sel_HeatMetric == "pin_height_mm", rv$sel_DiffFromBase == FALSE) ~ "CHANGE in RAW pin heights from PRIOR survey [RAW pin heights are in brackets]",
+    all(rv$sel_HeatMetric == "pin_height_mm", rv$sel_DiffFromBase == TRUE) ~ "CHANGE in RAW pin heights from FIRST survey [RAW pin heights are in brackets]",
+    all(rv$sel_HeatMetric == "standardized_soil_elev_mm", rv$sel_DiffFromBase == FALSE) ~ "CHANGE in STANDARDIZED SET heights from PRIOR survey [STANDARDIZED SET heights are in brackets]",
+    all(rv$sel_HeatMetric == "standardized_soil_elev_mm", rv$sel_DiffFromBase == TRUE) ~ "CHANGE in STANDARDIZED SET heights from FIRST survey [STANDARDIZED SET heights are in brackets]",
+    all(rv$sel_HeatMetric == "soil_elev_m", rv$sel_DiffFromBase == FALSE) ~ "CHANGE in ORTHOMETRIC heights from PRIOR survey [ORTHOMETRIC heights are in brackets]",
+    all(rv$sel_HeatMetric == "soil_elev_m", rv$sel_DiffFromBase == TRUE) ~ "CHANGE in ORTHOMETRIC heights from FIRST survey [ORTHOMETRIC heights are in brackets]")
   
   yr_range <- rv$PinHeatDataSET %>% dplyr::filter(station_code == input$sel_StationCode) %>% pull(event_date_yr) %>% range()
     div( HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$PinHeatDataSET$park_name)), ":   ", rv$sel_PinSite, " ", input$sel_StationCode, " (Yrs ", yr_range[1], "-", yr_range[2], ")</text><br><text style='color:blue; font-size:18px;'>Values in heatmap cells are ", cap_text,  "</text><br><text style='color:red; font-size:18px;'>SET pin heights are NOT adjusted for pin length; # of days btwn. surveys may differ greatly</center></text>")) )
@@ -1924,9 +1948,7 @@ renderPlot({
   shiny::req(input$sel_StationCode %in% unique(rv$PinHeatDataSET$station_code))
   
   if(all(unique(rv$PinHeatDataSET$park_name)==input$sel_Park, rv$sel_PinSite == input$sel_PinSite)) { # plot should turn blank if user has selected another park or site and this figure has not updated to reflect that change
-    legend_text <- switch(rv$sel_HeatMetric,
-                        "combined" = "CHANGE in SET pin heights from PRIOR survey ",
-                        "combined_base" = "CHANGE in SET pin heights from FIRST survey ")
+    legend_text <- ifelse(rv$sel_DiffFromBase, "CHANGE in heights from FIRST survey ", "CHANGE in heights from PRIOR survey ")
    # hacky legend because plotly heatmaps can't generate horizontal colorbars
   heat_legend <- grid.arrange(ggpubr::as_ggplot(
     get_legend(
@@ -1990,9 +2012,6 @@ renderPlotly({
   shiny::req(!is.null(rv$sel_PinSite))
   
   shiny::validate(need(all(rv$sel_PinSite == input$sel_PinSite,  unique(rv$PinHeatDataSET$park_name)==input$sel_Park), message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
-  
-  # saveRDS(isolate(reactiveValuesToList(rv)), here::here("temp_rv.RDS"))
-  # saveRDS(isolate(reactiveValuesToList(input)), here::here("temp_input.RDS"))
   
   plot_dat <- rv$SubDataSET %>% 
     dplyr::filter(site_name == rv$sel_PinSite & observation_type == "Standard") %>%
@@ -2310,7 +2329,7 @@ Raw Data {.tabset .tabset-fade}
   cat("line1859")
   reactable(
     rv$SubDataSET %>%
-      dplyr::select(-event_date_yr, -event_date_mnth, -event_date_wk, -diff_height_mm, -diff_days, -SET_reader_change, -SET_reader_transition, -SET_instrument_change, -SET_instrument_transition, -pin_collection_change, -pin_collection_transition),
+      dplyr::select(-event_date_yr, -event_date_mnth, -event_date_wk, -diff_pin_height_mm, -diff_days, -SET_reader_change, -SET_reader_transition, -SET_instrument_change, -SET_instrument_transition, -pin_collection_change, -pin_collection_transition),
     columns = list(
       network_code = colDef(minWidth = 130),
       network_name = colDef(minWidth = 180),
