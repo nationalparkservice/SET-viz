@@ -55,7 +55,6 @@ pkgs <- c("flexdashboard",
               "sf", # replace rgdal
               "sp", # transform projections
               "purrr", # for applying functions to dplyr groups
-              "dataMaid", # for data checks
               "shinyFiles", # for user to save files in specified location
               "RColorBrewer", # to display brewer palettes
               "shinyjs", # for easy functions that use JavaScript
@@ -87,21 +86,6 @@ options(shiny.maxRequestSize = 20*1024^2,
         # Header width doesn't match body width when this is set to TRUE. To fix, would need to include code to recalculate widths only after a tab is visible. If setting column widths, need to set autoWidth to TRUE
         dplyr.summarise.inform = FALSE
 )
-
-# dataMaid helper function that needs to be in global - rotate plot, wrap and truncate long labels
-vertLabPlot <- function(x, xlab, main) { 
-  qplot(x = stringr::str_wrap(substring(x, 0, 42), 15), xlab = xlab, main = main) +
-    coord_flip()
-  }
-
-# dataMaid helper function that needs to be in global - visualFunction for character, factor, labelled and logical variables
-vertLabStandardVisual  <- function(v, vnam, doEval = TRUE) {
-  v <- dataMaid:::escapeRStyle(na.omit(v))
-  thisCall <- call("vertLabPlot", x=v, xlab="", main=vnam)
-  if (doEval) {
-    return(eval(thisCall))
-  } else return(deparse(thisCall))
-}
 ```
 
 ```{r startup}
@@ -450,65 +434,6 @@ cat("line319")
   return(dat2)
 }
 
-FuncPlotlyScatter <- function(dat, x_nam = "Wk", trans_y = "identity", add_loess = TRUE, rotate_x = FALSE) {
-  # Function to generate scatterplot of data
-  #
-  # Args:
-  #   dat:  A data frame with the raw data
-  #   x_nam: Column name for x-axis variable
-  #   trans_y: Transformation to apply to y axis
-  #   add_loess:  Add loess smooth? (will be biased by censored data)
-  #   rotate_x: should x-axis labels be rotated?
-  #
-  # Returns:
-  #   List of scatterplot
-  # 
-  
-  shiny::req(sum(!is.na(dat$pin_height_mm)) > 0) # make sure there are data
-  
-  if(x_nam == "event_date_UTC") {
-    xaxes_min = min(dat$event_date_UTC, na.rm = TRUE)
-    xaxes_max = max(dat$event_date_UTC, na.rm = TRUE)
-  }
-  
-  yaxes_min = min(dat$pin_height_mm, na.rm = TRUE)
-  yaxes_max = max(dat$pin_height_mm, na.rm = TRUE)
-  
-  # Create the plot(s)
-    
-    p_points <- ggplot(data = dat, aes(x = event_date_wk, y = pin_height_mm, text = paste0("Site: ", site_name, "<br>Station: ", station_name, "<br>Visit Date: ", event_date_UTC, "<br>X-value: ", event_date_wk, "<br>Y-value: ", pin_height_mm))) +
-      geom_jitter(aes(fill = event_date_yr, color = event_date_yr), size = 2, alpha = 0.5, show.legend = c(fill = TRUE, color = FALSE, shape = FALSE))
-  
-    # Create a pretty x-axis
-    if(x_nam == "event_date_UTC") {
-      p1_points <- p_points + scale_x_date(date_breaks = "1 year", date_labels = "%Y", limits = c(xaxes_min, xaxes_max))
-    } else {
-      p1_points <- p_points + scale_x_discrete(breaks = levels(dat$event_date_wk), drop = FALSE)
-    }
-    
-    # If adding loess smooth...
-    # if(add_loess) {
-      p1_points <- p1_points + geom_smooth(data = dat, aes(x = event_date_wk, y = pin_height_mm), method = "loess", size = 0.5, alpha = 0.2, show.legend = FALSE)
-      # }
-    
-    # Final formatting of plots
-    p1_points <- p1_points +
-      scale_y_continuous(trans = trans_y, labels = function(x) as.character(round(x,1)), breaks = pretty_breaks(), limits = c(yaxes_min, yaxes_max)) + # alternatively, can use 'coord_cartesian(ylim = c(axes_min, axes_max))' to zoom in to the limits rather than "cutting off" the limits, as setting limits within scale_y_continuous() would do 
-      theme_bw(base_size = 11) +
-      {if(rotate_x) {theme(axis.text.x = element_text(angle = 60, hjust = 1))}} +
-      theme(axis.title.x = element_blank(),
-            axis.title.y = element_blank(),
-            legend.position = "top",
-            legend.text = element_text(size = 16),
-            legend.title = element_text(size = 16)) +
-      facet_wrap(. ~ station_name, drop = TRUE, ncol = 1) # add the name as facet label
-    out_plotly <- ggplotly(
-      p1_points,
-      height = 400*length(unique(dat$station_name))) # THIS IS NOT WORKING--CAN'T SCROLL DOWN
-    
-  return(out_plotly)
-}
-
 FuncSubplotMargins <- function(tot_page, num_subplots, left_prop = 0, right_prop = 0, top_prop = 0.1, bottom_prop = 0.1) {
   adj_top = ifelse(tot_page > 400, top_prop/num_subplots, .045) # need to divide so as number of plots increases, the space between plots doesn't get huge
   adj_bottom = ifelse(tot_page > 400, bottom_prop/num_subplots, .045)
@@ -710,9 +635,9 @@ FuncPlotlyMatrixPlot <- function(dat, heat_metric, discrete_cols = thresh3_cols,
       droplevels()
     
     if(heat_metric == "combined_base") { # for some reason, using ifelse within the mutate statement gives incorrect results
-      subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_height_base_mm, "  [", pin_height_mm, "]"))
+      subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_height_base_mm, "  [", pin_height_mm, "]")) # this is change since baseline, then change since last survey
     } else {
-        subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]"))
+        subdat %<>% dplyr::mutate(combined_change_height = paste0(diff_height_mm, "   [", pin_height_mm, "]")) # this is raw pin height, then change since last survey
       }
     
     subdat$level <- factor(subdat$level, levels = c("big decline", "no large changes", "big increase", "N/A"))
@@ -1016,7 +941,7 @@ FuncFormatSET_NERRs <- function(dat) {
     dplyr::select(reserve, set_id, year, month, day, arm_position, arm_qaqc_code, pin_number, height_mm, qaqc_code)
   return(temp_NERRs)
 }
-  
+
 ```
 
 ```{r action_buttons}
@@ -1155,8 +1080,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     
     # Clear things out
     rm(list = dat_vec)
-    unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-    cat("line1136")
+
     rv$DataSET <- as.data.frame(FuncCalcChange(dat = dat_list$pin_data)) 
     rv$DataStation <- dat_list$station_data
     rv$DataEvent <- dat_list$event_data
@@ -1228,10 +1152,7 @@ observeEvent(eventExpr = input$saved_data_file, {
     }
   
   shiny::req(!is.null(out))
-  cat("line1175")
-  unlink(list.files(path = here::here(), pattern = "^dataMaid"))
-cat("line1177"
-)
+
   for(i in c("DataSET", "DataStation", "DataEvent", "DataCriticalInfo", "DataMarker")) {
     if(!is.null(out[i])) {
     rv[[i]] <- out[[i]] # load the data in the dashboard
@@ -1245,44 +1166,6 @@ cat("line1184")
   ))
 }
   
-})
-
-# (Examine) Run data check (dataMaid report) ----
-observeEvent(eventExpr = input$button_RunDataCheck, {
-  shiny::req(!is.null(rv))
-  unlink(list.files(path = here::here(), pattern = "^dataMaid")) 
-  rv$ShowDM <- FALSE
-  
-      cat("line777")
-
-  shiny::req(!is.null(rv$SubDataSET), !is.null(rv$SubDataSummary), !is.null(input$sel_Pin_or_MH)) 
-
-withProgress(message = "Just a moment", detail = "...generating data check report", value = 0, { # show progress bar
-  
-  if(input$sel_Pin_or_MH == "pin") {
-    check_sub <- rv$SubDataSET %>%
-      dplyr::select(-record_ID, -pin_flag_notes, -vegetation_notes, -SET_direction_notes, -SET_notes, -dpl_note, -event_date_mnth, -event_date_wk, -SET_reader_transition, -pin_collection_transition, -diff_days_base)
-  } else {
-    check_sub <- rv$SubDataMarker %>%
-      dplyr::select(-record_ID, -marker_horizon_name, -core_measurement_number, -core_event_notes, -core_notes, -event_date_mnth, -event_date_wk, -reader_change)
-  }
-    
-    shiny::req(!is.null(check_sub))
-    if(nrow(check_sub) > 0) {
-
-dataMaid::makeDataReport(data = check_sub, visuals = dataMaid::setVisuals(
-  character = "vertLabStandardVisual",
-  factor = "vertLabStandardVisual",
-  labelled = "vertLabStandardVisual",
-  haven_labelled = "vertLabStandardVisual",
-  numeric = "standardVisual",
-  integer = "standardVisual",
-  logical = "vertLabStandardVisual",
-  Date = "standardVisual"), listChecks = FALSE, smartNum = FALSE, reportTitle = paste0("Station ", toupper(as.character(rv$SubDataSummary[input$out_TableSummary_rows_selected, "station_name"]))), render = TRUE, output = "html", openResult = FALSE, replace = TRUE, useVar = names(check_sub), file = "dataMaid.Rmd")
-      rv$ShowDM <- file.exists(here::here("dataMaid.html"))
-
-    }
-  })
 })
 
 # (Pin Heights) Update Summaries ----
@@ -1846,52 +1729,6 @@ reactableOutput("out_TableMarkerSummary")
 tags$style("#out_TableMarkerSummary{height:100vh;overflow-x:scroll;overflow-y:scroll}")
 ```
 
-### Data Check Report
-
-<font size="3">**This report summarizes data range/frequency and % missing for every numeric and categorical variable in the raw SET PIN or Marker Horizon data.**</font>
-
-* Click the 'Run Data Check' button to generate a report for the selected Park, year range, and data type (SET pin or marker horizon).
-
-<br>
-
-<hr>
-
-<div style='height:60px;'>
-
-```{r}
-splitLayout(
-    cellWidths = c("25%", "35%"),
-    renderUI({
-      shiny::req(!is.null(rv$SubDataSET))
-      radioButtons("sel_Pin_or_MH",
-                   label = strong("Choose a data type:"),
-                   choiceNames = list("SET (pin)", "Marker Horizon"),
-                   choiceValues = list("pin", "marker"),
-                   selected = "pin")
-      }),
-    actionButton("button_RunDataCheck", "Run Data Check", width = "100%", style="border-color:black; background-color: lightgreen; border:0px; margin:0px; width:200px")
-)
-```
-
-</div>
-
-<br>
-
-<div style='height:600px; width:95%;'>
-
-```{r data_check_report}
-shiny::addResourcePath("working_dir", here::here())
-
-renderUI({
-  FuncOrderCheck(import = TRUE, examine = TRUE)
-  cat("line1842")
-  shiny::validate(need(rv$ShowDM == TRUE, message = "Select a Park, then click the green 'Run Data Check' button (may take a little time to run; progress bar is below)"))
-
-  tags$iframe(src="working_dir/dataMaid.html", width = "100%", height = "90%", overflow = "scroll") # don't use 100% for height because it won't show the whole thing
-})
-```
-</div>
-
 SET Data
 ====================================== 
 
@@ -2180,7 +2017,7 @@ renderPlotly({
     labs(title = NULL, x = NULL, y = NULL) +
     theme_bw() +
     theme(legend.position = "none") +
-    facet_grid(rows = vars(station_name), scales = "free_y")
+    facet_grid(cols = vars(station_name), scales = "free_y", ncol = 1)
   
   ggplotly(p, height = length(unique(plot_dat$station_name)) * 350, tooltip = c("text")) %>% # got rid of the 'width = 800' argument here, per Jim's request
     add_annotations( # x-axis title
