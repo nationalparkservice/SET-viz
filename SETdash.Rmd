@@ -1,5 +1,5 @@
 ---
-title: "SET Visualizer"
+title: "SET QA/QC Visualizer"
 output:
   flexdashboard::flex_dashboard:
     theme: yeti
@@ -41,40 +41,42 @@ rm(list=ls())
 
 ### Load libraries -----
 # Will automatically install any libraries it can't find (except flexdashboard)
-pkgs <- c("flexdashboard", 
-              "shiny", 
-              "knitr", 
-              "odbc", # pull data from SQL server
-              "scales",
-              "leaflet", 
-              "RgoogleMaps", # for mapzoom
-              "plotly", 
-              "tidyverse", 
-              "plyr", 
-              "readr",
-              "magrittr", 
-              "leaflet.extras", 
-              "lubridate", 
-              "here", 
-              "httr", # use web services
-              "sf", # replace rgdal
-              "sp", # transform projections
-              "purrr", # for applying functions to dplyr groups
-              "shinyFiles", # for user to save files in specified location
-              "RColorBrewer", # to display brewer palettes
-              "shinyjs", # for easy functions that use JavaScript
-              "stringr", # to detect text snippets
-              "reactable",
-              "data.table", # for fast lag calcs
-              "DT", # for interactive tables
-              "zoo", # for year-month and carry-forward NA's for lag
-              "cowplot", # to get legends from plots
-          "shinyWidgets", # for radiogroup buttons
-              "gridExtra", # for arranging plots and adding plot annotations (ggplotly can't do captions or subtitles)
-          "stars",
-          "ggpubr",
-              "RgoogleMaps", # for MaxZoom & MinZoom
-              "leaflet.minicharts") # for pie charts in leaflet maps
+pkgs <- c(
+  "flexdashboard",  
+  "shiny",
+  "knitr",
+  "odbc", # pull data from SQL server
+  "scales",
+  "leaflet",
+  "RgoogleMaps", # for mapzoom
+  "plotly",
+  "tidyverse",
+  "plyr", 
+  "readr",
+  "magrittr",
+  "leaflet.extras",
+  "lubridate",
+  "here",
+  "httr", # use web services
+  "sf", # replace rgdal
+  "sp", # transform projections
+  "purrr", # for applying functions to dplyr groups
+  "shinyFiles", # for user to save files in specified location
+  "RColorBrewer", # to display brewer palettes
+  "stringr", # to detect text snippets
+  "shinyBS", # tooltips for inputs
+  "reactable",
+  "data.table", # for fast lag calcs
+  "DT", # for interactive tables
+  "zoo", # for year-month and carry-forward NA's for lag
+  "cowplot", # to get legends from plots
+  "shinyWidgets", # for radiogroup buttons
+  "gridExtra", # for arranging plots and adding plot annotations (ggplotly can't do captions or subtitles)
+  "stars",
+  "ggpubr",
+  "RgoogleMaps", # for MaxZoom & MinZoom
+  "leaflet.minicharts") # for pie charts in leaflet maps
+
 installed_pkgs <- pkgs %in% installed.packages()
 if (length(pkgs[!installed_pkgs]) > 0) install.packages(pkgs[!installed_pkgs], repos = "https://cloud.r-project.org" , dep=TRUE) 
 lapply(pkgs, library, character.only = TRUE)
@@ -94,7 +96,7 @@ options(shiny.maxRequestSize = 20*1024^2,
 
 ```{r startup}
 
-rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_HeatMetric = NULL, sel_DiffFromBase = NULL, sel_ThresholdType = NULL, ThreshLevels = NULL, sel_YrRange = NULL, PinHeatPlots = NULL, PinPieMatrix = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
+rv <- reactiveValues(DataSET = NULL, DataStation = NULL, DataEvent = NULL, DataCriticalInfo = NULL, DataMarker = NULL, UnitPoly = NULL, SubDataSET = NULL, SubDataSummary = NULL, SubDataDateSummary = NULL, SubDataMarker = NULL, SubDataMarkerSummary = NULL, SubDataDateMarkerSummary = NULL, PlotData = NULL, ShowDM = FALSE, PinHeatDataSET = NULL, ThreshCounts = NULL, sel_PinSite = NULL, sel_SETmetric = NULL, sel_DiffFromBase = NULL, sel_ThresholdType = NULL, ThreshLevels = NULL, sel_YrRange = NULL, PinHeatPlots = NULL, PinPieMatrix = NULL, sel_MHSite = NULL, MarkerHeatDataSET = NULL, RawMHHeatPlots = NULL, MapDat = NULL, DataSET_NERRs = NULL)
 
 level_colors = c("#ffd700", "#add8e6", "#ffa500", "#ffffff") # corresponds with low, middle, high, NA
 ```
@@ -139,6 +141,7 @@ tags$style(".datatables.html-widget.html-widget-static-bound {
 tags$style(".dataTables_scrollBody {
   height: unset !important;
 }")
+
 ```
 
 ```{r functions}
@@ -280,8 +283,8 @@ FuncCalcPinAlert <- function(dat, event_level_dat) {
 
   dat2 <- dat %>%
     dplyr::mutate(
-      sel_metric = get(rv$sel_HeatMetric),
-      sel_diff_metric = get(paste(rv$sel_DiffFromBase, rv$sel_HeatMetric, sep = "_"))
+      sel_metric = get(rv$sel_SETmetric),
+      sel_diff_metric = get(paste(rv$sel_DiffFromBase, rv$sel_SETmetric, sep = "_"))
       )
   
   double_dat <- dat2 %>% # Double reads only, need to merge it back--hopefully there is never more than one double read of a pin in a survey!
@@ -717,7 +720,7 @@ FuncPlotlyMatrixPlot <- function(dat) {
     plot_ly(
       data = template, 
       text = text,
-      width = max(900, ifelse(rv$sel_HeatMetric == "soil_elev_m", 105, 90)*length(unique(template$event_date_UTC))),
+      width = max(900, ifelse(rv$sel_SETmetric == "soil_elev_m", 105, 90)*length(unique(template$event_date_UTC))),
       height = total_page_ht, # can't specify heights in subplot, need to set it at this plot_ly level
       showscale = FALSE) %>%
       plotly::add_heatmap(
@@ -764,7 +767,7 @@ FuncPlotlyMatrixPlot <- function(dat) {
     
     incProgress(1/2, detail = "...putting final plot together")
     
-    title_metric_text <- switch(rv$sel_HeatMetric,
+    title_metric_text <- switch(rv$sel_SETmetric,
                                 pin_height_mm = "RAW pin heights (uncorrected for pin length)",
                                 standardized_soil_elev_mm = "STANDARDIZED pin heights",
                                 soil_elev_m = "ORTHOMETRIC heights")
@@ -1221,7 +1224,7 @@ observeEvent(eventExpr = input$button_RecalcPinHeights, {
   withProgress(message = "Just a moment", detail = "...calculating summaries", value = 0, {
     
     rv$sel_PinSite <- input$sel_PinSite
-    rv$sel_HeatMetric <- input$sel_HeatMetric
+    rv$sel_SETmetric <- input$sel_SETmetric
     rv$sel_YrRange <- input$sel_YrRange
     rv$sel_DiffFromBase <- input$sel_DiffFromBase
     rv$sel_ThresholdType <- input$sel_ThresholdType
@@ -1340,7 +1343,7 @@ renderUI({
 })
 
 renderUI({
-  if(all(!is.null(rv$SubDataSET), input$sel_HeatMetric %in% c("change", "combined", "combined_base"))) {
+  if(all(!is.null(rv$SubDataSET), input$sel_SETmetric %in% c("change", "combined", "combined_base"))) {
     shinyjs::showElement("wp_Thresholds")
     } else {
       shinyjs::hideElement("wp_Thresholds")
@@ -1499,7 +1502,7 @@ Column {data-width=80}
 #### <font size="3"><b> Monitoring Wetland Elevation Dynamics in National Park Units</b></font> 
 
 <font size="2"> 
-This dashboard is an interactive tool for QAQC and visualizing wetland elevation data collected in national park units. Wetland elevation is monitored using the Surface Elevation Table (SET) and marker horizons. Summary tables and graphs can be exported as .csv and .png files, respectively.</font>
+This dashboard is an interactive tool for QAQC and visualizing wetland elevation and marker horizon data collected in national park units. Wetland elevation is monitored using the Surface Elevation Table (SET) and marker horizons. Summary tables and graphs can be exported as .csv and .png files, respectively.</font>
 
 <font size="2"><b>IMPORT DATA - OPTION 1: PULL FROM SQL</b></font>
 
@@ -1827,7 +1830,7 @@ renderUI({
   keep_choices <- c(length(unique(na.omit(rv$SubDataSET$pin_height_mm))) > 1,
                     length(unique(na.omit(rv$SubDataSET$standardized_soil_elev_mm))) > 1,
                     length(unique(na.omit(rv$SubDataSET$soil_elev_m))) > 1)
-      radioButtons("sel_HeatMetric",
+      radioButtons("sel_SETmetric",
                    label = strong("SET data to show:"),
                    choiceNames = list("Pin height (mm)", "Standardized pin height (mm)", "Orthometric height (m)")[keep_choices],
                    choiceValues = list("pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m")[keep_choices],
@@ -1916,18 +1919,18 @@ tags$div(renderText({
   
   
   renderUI({
-  shiny::req(!is.null(input$sel_ThresholdType), !is.null(input$sel_HeatMetric))
+  shiny::req(!is.null(input$sel_ThresholdType), !is.null(input$sel_SETmetric))
   conditionalPanel(
     condition = "(input.sel_ThresholdType == 'numb')",
     numericInput("sel_ThresholdLower",
                  label = strong("Enter lower limit"),
                  max = 0,
-                 value = ifelse(input$sel_HeatMetric == "soil_elev_m", -0.01, -20)),
+                 value = ifelse(input$sel_SETmetric == "soil_elev_m", -0.01, -20)),
    
       numericInput("sel_ThresholdUpper",
                  label = strong("Enter upper limit"),
                  min = 0,
-                 value = ifelse(input$sel_HeatMetric == "soil_elev_m", 0.01, 20))
+                 value = ifelse(input$sel_SETmetric == "soil_elev_m", 0.01, 20))
     
     )
   })
@@ -1983,10 +1986,10 @@ renderUI({
 ```{r heat}
 # Addressed the unequal widths issue by putting legend in same R chunk as the graph
 renderUI({
-  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET), !is.null(input$sel_StationCode), !is.null(rv$PinHeatPlots), !is.null(rv$sel_HeatMetric), !is.null(rv$sel_DiffFromBase))
+  shiny::req(!is.null(input$sel_Park), !is.null(rv$PinHeatDataSET), !is.null(input$sel_PinSite), !is.null(rv$sel_PinSite), !is.null(rv$SubDataSET), !is.null(input$sel_StationCode), !is.null(rv$PinHeatPlots), !is.null(rv$sel_SETmetric), !is.null(rv$sel_DiffFromBase))
   shiny::req(rv$sel_PinSite == input$sel_PinSite, unique(rv$PinHeatDataSET$park_name)==input$sel_Park)
 
-    metric_text <- switch(rv$sel_HeatMetric,
+    metric_text <- switch(rv$sel_SETmetric,
                         pin_height_mm = "RAW pin heights (mm)",
                         standardized_soil_elev_mm = "STANDARDIZED pin heights (mm)",
                         soil_elev_m = "ORTHOMETRIC heights (m)"
@@ -2056,7 +2059,7 @@ plotlyOutput('out_PinHeat', height="100%", width = "100%")
 
 <font size="3">**These line plots show the selected SET HEIGHTS (raw pin, standardized pin, or orthometric) over time for the selected site.**</font>
 
-* Lines are color-coded by SET direction (SET arm).
+* Best-fit lines color-coded by SET direction (SET arm) are included for visual purposes only (this is NOT a trend analysis).
 
 ####
   
@@ -2077,9 +2080,9 @@ renderPlotly({
   
   shiny::validate(need(all(rv$sel_PinSite == input$sel_PinSite,  unique(rv$PinHeatDataSET$park_name)==input$sel_Park), message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
   
-  shiny::req(!is.null(rv$sel_HeatMetric))
+  shiny::req(!is.null(rv$sel_SETmetric))
   
-  metric_text <- switch(rv$sel_HeatMetric,
+  metric_text <- switch(rv$sel_SETmetric,
                       pin_height_mm = "RAW pin height (mm)",
                       standardized_soil_elev_mm = "STANDARDIZED pin height (mm)",
                       soil_elev_m = "ORTHOMETRIC height (m)"
@@ -2100,9 +2103,9 @@ renderPlotly({
   names(cbp1_arm) = unique(plot_dat$unique_arm)
 
   p <- ggplot(plot_dat, aes(x = event_date_UTC, y = sel_metric, color = unique_arm, text = hover_text)) +
-    geom_line(aes(group = interaction(unique_arm, pin_position), alpha = 1), show.legend = FALSE) + # this alpha needs to be WITHIN aes, otherwise will mess up the grouping 
-    geom_point(size = 0.2, alpha = 0.3, show.legend = FALSE) +
-    geom_smooth(data = plot_dat, aes(group = unique_arm, alpha = 1), method = "lm", se = FALSE, show.legend = FALSE) +
+    geom_line(aes(group = interaction(unique_arm, pin_position)), alpha = 0.3, show.legend = FALSE) + # this alpha needs to be WITHIN aes, otherwise will mess up the grouping 
+    geom_point(size = 0.4, alpha = 0.4, show.legend = FALSE) +
+    geom_line(data = plot_dat, stat = "smooth", method = lm, aes(group = unique_arm), size = 1) +
     scale_colour_manual(values = cbp1_arm) +
     labs(title = NULL, x = NULL, y = metric_text) +
     theme_bw() +
@@ -2376,9 +2379,9 @@ shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, mes
 })
 ```
 
-### Line Plots
+### Point Plots
 
-<font size="3">**These line plots show the marker horizon depths over time for the selected site.**</font>
+<font size="3">**These point plots show the marker horizon depths over time for the selected site. A best-fit line is included for visual purposes only (this is NOT a trend analysis)**</font>
 
 ####
 
@@ -2387,7 +2390,7 @@ renderUI({
   shiny::req(!is.null(input$sel_Park), !is.null(rv$MarkerHeatDataSET), !is.null(rv$sel_MHSite), !is.null(rv$SubDataSET))
   shiny::req(rv$sel_MHSite %in% unique(rv$SubDataSET$site_name), unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park)
 
-    div(HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Plots show change in Marker Horizon depth, averaged over replicate core readings per survey </text><br><text style='color:red; font-size:18px;'>Hover over a point to see its information</text></center>")) )
+    div(HTML(paste0("<br><center><text style='color:blue; font-size:22px; font-weight:bold;'>", toupper(unique(rv$MarkerHeatDataSET$park_name)), ":   ", rv$sel_MHSite, " (Yrs ", rv$sel_YrRange[1], "-", rv$sel_YrRange[2], ")</text><br><text style='color:blue; font-size:18px;'>Plots show Marker Horizon depth, averaged over replicate core readings per survey </text><br><text style='color:red; font-size:18px;'>Hover over a point to see its information</text></center>")) )
   })
 
 renderPlotly({
@@ -2406,13 +2409,13 @@ renderPlotly({
       )
 
   p <- ggplot(plot_dat, aes(x = event_date_UTC, y = avg_reading, text = hover_text)) +
-    geom_line(aes(group = marker_horizon_name)) + 
-    geom_point(size = 1, alpha = 0.7) +
+    geom_point(size = 1, alpha = 1, show.legend = FALSE) +
+    geom_line(data = plot_dat, stat = "smooth", method = lm, aes(x = event_date_UTC, y = avg_reading, group = interaction(station_name, marker_horizon_name)), size = 0.3, alpha = 0.4) +
     labs(title = NULL, x = NULL, y = "Marker Horizon Depth (mm)") +
     theme_bw() +
     facet_grid(rows = vars(station_name), cols = vars(marker_horizon_name), scales = "free_y")
   
-  ggplotly(p, height = length(unique(plot_dat$station_name)) * 350, tooltip = c("text")) %>% # got rid of the 'width = 800' argument here, per Jim's request
+  ggplotly(p, height = length(unique(plot_dat$station_name)) * 350, tooltip = c("text")) %>%
     add_annotations( # x-axis title
       x = 0.5,
       y = -0.06,
@@ -2427,7 +2430,7 @@ renderPlotly({
 })
 ```
 
-All Raw Data
+All Imported Raw Data
 ====================================== 
 
 Raw Data {.tabset .tabset-fade}
