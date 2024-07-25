@@ -497,14 +497,20 @@ FuncPlotlyMHHeatPlot <- function(dat, heat_metric, discrete_cols, discrete_level
   #   GGplot heat map
   #
   withProgress(message = "Just a moment", value = 0, {
-    if(heat_metric == "raw") {
+    
+    keep_dates <- dat %>%
+      dplyr::filter(!is.na(core_measurement_depth_mm)) %>%
+      distinct(event_date_UTC) %>%
+      pull(.)
       
-    subdat <- dat%>%
+    subdat <- dat %>%
       ungroup() %>%
+      dplyr::filter(event_date_UTC %in% keep_dates) %>%
     dplyr::arrange(station_code, marker_horizon_name, core_measurement_number, event_date_UTC) %>%
     dplyr::mutate(hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "MH Name: ", marker_horizon_name, "</span><br>Core #: ", core_measurement_number, "<br>Visit Date: ", event_date_UTC, "<br>Core Depth (mm): ", core_measurement_depth_mm, "<br>Core Type: ", core_type, "<br>Date Est'd: ", established_date, "<br>Core Condition: ", core_condition, "<br>Core Notes: ", core_notes, "<br>Core Event Notes: ", core_event_notes, "<br>Record ID: ", ifelse(is.na(record_ID), " ", record_ID) , ifelse((level=="MH_alert")|reader_change_alert, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(core_condition_alert, paste0("<br>Core Condition: ", core_condition), ""), ifelse(core_notes_alert,  paste0("<br>Core Notes: ", core_notes), ""), ifelse(core_event_notes_alert, paste0("<br>Core Event Notes: ", core_event_notes), ""), ifelse(reader_change_alert, paste0("<br>MH Reader Change: ", reader_transition), ""))
-    )
-    }
+    ) %>% 
+      droplevels()
+    
   shiny::req(!is.null(subdat))
   
   # Calculate total and relative heights
@@ -1228,9 +1234,6 @@ observeEvent(eventExpr = input$button_RecalcPinHeights, {
     rv$sel_YrRange <- input$sel_YrRange
     rv$sel_DiffFromBase <- input$sel_DiffFromBase
     rv$sel_ThresholdType <- input$sel_ThresholdType
-    
-      saveRDS(isolate(reactiveValuesToList(rv)), here::here("TEMP_rv.RDS"))
-  saveRDS(isolate(reactiveValuesToList(input)), here::here("TEMP_input.RDS"))
 
     # Create pin heat plots
     pin_heat_dat <- FuncCalcPinAlert(dat = dplyr::filter(rv$SubDataSET, site_name == input$sel_PinSite), event_level_dat = dplyr::filter(rv$SubDataEvent, site_name == input$sel_PinSite) %>% dplyr::select(station_name, event_date_UTC, event_notes))
@@ -2110,7 +2113,8 @@ renderPlotly({
     labs(title = NULL, x = NULL, y = metric_text) +
     theme_bw() +
     theme(legend.position = "none") +
-    facet_wrap(vars(station_name), ncol = 1) # scales = "free_y"
+    facet_wrap(vars(station_name), ncol = 1) +
+    theme(strip.text = element_text(face = "bold", size = rel(1.5)))
   
   ggplotly(p, height = length(unique(plot_dat$station_name)) * 350, tooltip = c("text")) %>% # got rid of the 'width = 800' argument here, per Jim's request
     add_annotations( # x-axis title
@@ -2370,6 +2374,9 @@ renderPlotly({ # separate validation statements so they are checked in sequence
   shiny::req(!is.null(input$sel_Park))
 shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
  shiny::req(!is.null(input$sel_MHStationCode))
+ 
+       saveRDS(isolate(reactiveValuesToList(rv)), here::here("TEMP_rv.RDS"))
+  saveRDS(isolate(reactiveValuesToList(input)), here::here("TEMP_input.RDS"))
 
     rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = subset(rv$MarkerHeatDataSET, station_code == input$sel_MHStationCode), heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
 
@@ -2413,7 +2420,8 @@ renderPlotly({
     geom_line(data = plot_dat, stat = "smooth", method = lm, aes(x = event_date_UTC, y = avg_reading, group = interaction(station_name, marker_horizon_name)), size = 0.3, alpha = 0.4) +
     labs(title = NULL, x = NULL, y = "Marker Horizon Depth (mm)") +
     theme_bw() +
-    facet_grid(rows = vars(station_name), cols = vars(marker_horizon_name), scales = "free_y")
+    facet_grid(rows = vars(station_name), cols = vars(marker_horizon_name), scales = "free_y") +
+    theme(strip.text = element_text(face = "bold", size = rel(1.5)))
   
   ggplotly(p, height = length(unique(plot_dat$station_name)) * 350, tooltip = c("text")) %>%
     add_annotations( # x-axis title
@@ -2430,7 +2438,7 @@ renderPlotly({
 })
 ```
 
-All Imported Raw Data
+Raw Data
 ====================================== 
 
 Raw Data {.tabset .tabset-fade}
@@ -2444,11 +2452,8 @@ Raw Data {.tabset .tabset-fade}
   FuncOrderCheck(import = TRUE, examine = TRUE)
   
   reactable(
-    rv$DataSET,
+    rv$DataSET %>% dplyr::filter(park_name == input$sel_Park) %>% dplyr::select(-network_code, -network_name, -park_name),
     columns = list(
-      network_code = colDef(minWidth = 130),
-      network_name = colDef(minWidth = 180),
-      park_name = colDef(minWidth = 180),
       station_code = colDef(minWidth = 130),
       station_name = colDef(minWidth = 130),
       SET_reader = colDef(minWidth = 150),
@@ -2482,11 +2487,8 @@ tags$style("#out_TablePin{height:100vh;overflow-x:scroll;overflow-y:scroll}")
   FuncOrderCheck(import = TRUE, examine = TRUE)
 
   reactable(
-    rv$DataMarker,
+    rv$DataMarker %>% dplyr::filter(park_name == input$sel_Park) %>% dplyr::select(-network_code, -network_name, -park_name),
     columns = list(
-      network_code = colDef(minWidth = 130),
-      network_name = colDef(minWidth = 180),
-      park_name = colDef(minWidth = 180),
       station_code = colDef(minWidth = 130),
       station_name = colDef(minWidth = 130),
       reader_name = colDef(minWidth = 150),
@@ -2515,11 +2517,8 @@ tags$style("#out_TableMarker{height:100vh;overflow-x:scroll;overflow-y:scroll}")
   FuncOrderCheck(import = TRUE, examine = TRUE)
 
   reactable(
-    rv$DataEvent,
+    rv$DataEvent %>% dplyr::filter(park_name == input$sel_Park) %>% dplyr::select(-network_code, -network_name, -park_name),
     columns = list(
-      network_code = colDef(minWidth = 130),
-      network_name = colDef(minWidth = 180),
-      park_name = colDef(minWidth = 180),
       station_code = colDef(minWidth = 130),
       station_name = colDef(minWidth = 130),
       event_notes = colDef(minWidth = 180)
@@ -2546,11 +2545,8 @@ tags$style("#out_TableEvent{height:100vh;overflow-x:scroll;overflow-y:scroll}")
   FuncOrderCheck(import = TRUE, examine = TRUE)
 
   reactable(
-    rv$DataCriticalInfo,
+    rv$DataCriticalInfo %>% dplyr::filter(park_name == input$sel_Park) %>% dplyr::select(-network_code, -network_name, -park_name),,
     columns = list(
-      network_code = colDef(minWidth = 130),
-      network_name = colDef(minWidth = 180),
-      park_name = colDef(minWidth = 180),
       station_code = colDef(minWidth = 130),
       station_name = colDef(minWidth = 130),
       detail = colDef(minWidth = 300)
@@ -2577,11 +2573,8 @@ tags$style("#out_TableCI{height:100vh;overflow-x:scroll;overflow-y:scroll}")
   FuncOrderCheck(import = TRUE, examine = TRUE)
 
   reactable(
-    rv$DataStation,
+    rv$DataStation %>% dplyr::filter(park_name == input$sel_Park) %>% dplyr::select(-network_code, -network_name, -park_name),,
     columns = list(
-      network_code = colDef(minWidth = 130),
-      network_name = colDef(minWidth = 180),
-      park_name = colDef(minWidth = 180),
       station_code = colDef(minWidth = 130),
       station_name = colDef(minWidth = 130),
       station_latitude = colDef(minWidth = 180),
@@ -2603,7 +2596,7 @@ reactableOutput("out_TableStation")
 tags$style("#out_TableStation{height:100vh;overflow-x:scroll;overflow-y:scroll}")
 ```
 
-Export Data for NERRs
+Export Data for NERRs (all parks)
 ====================================== 
 Inputs {.sidebar data-width=300}
 -------------------------------------
