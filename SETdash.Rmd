@@ -2375,8 +2375,8 @@ renderPlotly({ # separate validation statements so they are checked in sequence
 shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
  shiny::req(!is.null(input$sel_MHStationCode))
  
-       saveRDS(isolate(reactiveValuesToList(rv)), here::here("TEMP_rv.RDS"))
-  saveRDS(isolate(reactiveValuesToList(input)), here::here("TEMP_input.RDS"))
+  #      saveRDS(isolate(reactiveValuesToList(rv)), here::here("TEMP_rv.RDS"))
+  # saveRDS(isolate(reactiveValuesToList(input)), here::here("TEMP_input.RDS"))
 
     rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = subset(rv$MarkerHeatDataSET, station_code == input$sel_MHStationCode), heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
 
