@@ -1835,7 +1835,7 @@ renderUI({
                     length(unique(na.omit(rv$SubDataSET$soil_elev_m))) > 1)
       radioButtons("sel_SETmetric",
                    label = strong("SET data to show:"),
-                   choiceNames = list("Pin height (mm)", "Standardized pin height (mm)", "Orthometric height (m)")[keep_choices],
+                   choiceNames = list("Pin height (mm) - UNCORRECTED", "Standardized pin height (mm)", "Orthometric height (m)")[keep_choices],
                    choiceValues = list("pin_height_mm", "standardized_soil_elev_mm", "soil_elev_m")[keep_choices],
                    selected = "pin_height_mm")
       })
@@ -1963,6 +1963,9 @@ SET Pin Heights - Output {.tabset .tabset-fade}
 
 * Hover over cells to see relevant alerts and data notes.
 
+<span style="color:red;">**PIN DATA ARE UNCORRECTED. Use Standardized or Orthometric pin heights if there are changes to the pin lengths or the SET instrument over time.**
+</span>
+
 ####
 ```{r heat_plots_input}
 # Some stations have much a much longer range of survey dates than others, and it's not easy to adjust individual width for vertically stacked subplots. So instead, user selects which station to view
@@ -2062,7 +2065,8 @@ plotlyOutput('out_PinHeat', height="100%", width = "100%")
 
 <font size="3">**These line plots show the selected SET HEIGHTS (raw pin, standardized pin, or orthometric) over time for the selected site.**</font>
 
-* Best-fit lines color-coded by SET direction (SET arm) are included for visual purposes only (this is NOT a trend analysis).
+<span style="color:red;">**Best-fit lines color-coded by SET direction (SET arm) are included for visual purposes only (this is NOT a trend analysis).**
+</span>
 
 ####
   
