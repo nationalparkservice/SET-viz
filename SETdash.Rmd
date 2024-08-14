@@ -1136,7 +1136,7 @@ marker_horizon_data <- DBI::dbGetQuery(con, marker_horizon_data_SQL)
     # Clear things out
     rm(list = dat_vec)
 
-    rv$DataSET <- as.data.frame(FuncCalcChange(dat = dat_list$pin_data)) 
+    rv$DataSET <- as.data.frame(FuncCalcChange(dat = dat_list$pin_data %>%    dplyr::mutate(standardized_soil_elev_mm = standardized_soil_elev_mm + 1000))) 
     rv$DataStation <- dat_list$station_data
     rv$DataEvent <- dat_list$event_data
     rv$DataCriticalInfo <- dat_list$critical_information_data
@@ -2063,7 +2063,7 @@ plotlyOutput('out_PinHeat', height="100%", width = "100%")
 
 ### Line Plots
 
-<font size="3">**These line plots show the selected SET HEIGHTS (raw pin, standardized pin, or orthometric) over time for the selected site.**</font>
+<font size="3">**These line plots show the selected SET HEIGHTS (raw pin, standardized pin + 1000, or orthometric) over time for the selected site.**</font>
 
 <span style="color:red;">**Best-fit lines color-coded by SET direction (SET arm) are included for visual purposes only (this is NOT a trend analysis).**
 </span>
@@ -2091,7 +2091,7 @@ renderPlotly({
   
   metric_text <- switch(rv$sel_SETmetric,
                       pin_height_mm = "RAW pin height (mm)",
-                      standardized_soil_elev_mm = "STANDARDIZED pin height (mm)",
+                      standardized_soil_elev_mm = "STANDARDIZED pin height + 1000 (mm)",
                       soil_elev_m = "ORTHOMETRIC height (m)"
   )
   
