@@ -8,21 +8,6 @@ runtime: shiny
 ---
 
 ```{r global, include=FALSE}
-### STILL TO FIX
-# quantiles
-# first col diff from base should not be colored in matrix
-# double read fnot size
-#
-# when metric is changed or metric diff, tell user to refresh
-# 
-# for heatmap diff from first survey error that can't figure out domain
-# 
-# fix the cap_text etc
-# 
-# heatmaps don't have colors (but the legends are fine)
-# 
-# maps not showing
-
 ### NOTES
 # Converted all tibbles to data frames to get rid of phantom column name errors
 
@@ -676,9 +661,10 @@ FuncPlotlyMatrixPlot <- function(dat) {
     dplyr::arrange(station_name, SET_direction, pin_position, event_date_UTC) %>%
     dplyr::mutate(
       hover_label = paste0("<span style='font-size:16px; font-weight:bold;'>", "Pipe Direction: ", paste0(SET_direction, " (", SET_direction_azimuth, " degrees)"), "</span><br>Pin Position: ", pin_position, "<br>Visit Date: ", event_date_UTC, "<br>LEVEL: ", level_categ, "<br>Height: ", sel_metric, ifelse(!is.na(SET_reader2), paste0("<br>Height2 (DOUBLE READ): ", sel_metric2), ""), "<br>Height Diff: ", sel_diff_metric, "<br>Days Diff: ", switch((rv$sel_DiffFromBase == "diff")+1, diff_days_base, diff_days), "<br>SET Reader: ", SET_reader, ifelse(!is.na(SET_reader2), paste0("<br>SET Reader2 (DOUBLE READ): ", SET_reader2), ""), "<br>Pin Collection: ", pin_collection, "<br>Pin Length: ", pin_length_mm, "<br>Record ID: ", record_ID, ifelse(alert_level, "<span style='font-size:16px; font-weight:bold;'><br><br>ALERTS!!!</span>", "<span style='font-size:16px;'><br><br>(no alerts)</span>"), ifelse(dpl_alert, paste0("<br>DPL: ", dpl), ""), ifelse(pin_flag_alert, paste0("<br>Pin Flag: ", pin_flag_label, "<br>Pin Flag Notes: ", pin_flag_notes), ""), ifelse(veg_notes_alert,  paste0("<br>Vegetation Notes: ", vegetation_notes), ""), ifelse(SET_notes_alert, paste0("<br>SET Notes: ", SET_notes), ""), ifelse(analysis_alert & !is.na(exclude_int_reason_ID), paste0("<br>Exclude, Interval Analysis: ", exclude_int_reason_ID, " (", exclude_int_reason, ")"),""),ifelse(analysis_alert & !is.na(exclude_cumul_reason_ID), paste0("<br>Exclude, Cumul Analysis: ", exclude_cumul_reason_ID, " (", exclude_cumul_reason, ")"), ""), ifelse(SET_reader_alert & !is.na(SET_reader_transition), paste0("<br>Set Reader Change: ", SET_reader_transition), ""), ifelse(SET_instrument_alert & !is.na(SET_instrument_transition), paste0("<br>Set Instrument Change: ", SET_instrument_transition), ""), ifelse(pin_collection_alert & !is.na(pin_collection_transition), paste0("<br>Pin Collection Change: ", pin_collection_transition), ""), ifelse(event_notes_alert, paste0("<br>Event Notes: ", event_notes), "")),
-      combined_change_height = ifelse(!is.na(SET_reader2), paste0("<font size=`4`><b>", sel_diff_metric, "   [", sel_metric, "]</b></font>"), paste0( sel_diff_metric, "   [", sel_metric, "]"))
+      # combined_change_height = ifelse(!is.na(SET_reader2), paste0("<font size=`4`><b>", sel_diff_metric, "   [", sel_metric, "]</b></font>"), paste0( sel_diff_metric, "   [", sel_metric, "]"))
+      combined_change_height = paste0(sel_diff_metric, "   [", sel_metric, "]")
       ) %>%
-      dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, observation_type, pin_position, sel_metric, sel_diff_metric, combined_change_height, diff_days, diff_days_base, level_categ, hover_label, border_color) %>%
+      dplyr::select(record_ID, site_name, station_name, SET_direction_azimuth, SET_direction, pin_position, event_date_UTC, observation_type, pin_position, sel_metric, sel_diff_metric, combined_change_height, diff_days, diff_days_base, level_categ, hover_label, border_color, SET_reader2) %>%
       droplevels()
     
     subdat$level_categ[is.na(subdat$level_categ)] <-"N/A" # this is necessary so heatmap will still work even if no data 
@@ -700,10 +686,11 @@ FuncPlotlyMatrixPlot <- function(dat) {
       subdat_pipe <- dplyr::filter(subdat, SET_direction == j)
 
     # create number matrix to put values in the heatmap cells
-      template <- subdat_pipe %>%
-      dplyr::select(pin_position, event_date_UTC) %>%
-      expand(pin_position, event_date_UTC) %>%
-        left_join(subdat_pipe[c("SET_direction", "SET_direction_azimuth", "pin_position", "event_date_UTC", "sel_metric", "sel_diff_metric", "combined_change_height", "hover_label", "level_categ", "border_color")], by = c("pin_position", "event_date_UTC")) %>%
+      temp_template <- subdat_pipe %>%
+      dplyr::select(pin_position, event_date_UTC, SET_reader2) 
+      template <- temp_template %>% expand(pin_position, event_date_UTC) %>%
+        dplyr::left_join(subdat_pipe[c("SET_direction", "SET_direction_azimuth", "pin_position", "event_date_UTC", "sel_metric", "sel_diff_metric", "combined_change_height", "hover_label", "level_categ", "border_color")], by = c("pin_position", "event_date_UTC")) %>%
+        dplyr::left_join(temp_template, by = c("pin_position", "event_date_UTC")) %>%
       dplyr::arrange(event_date_UTC, pin_position)
 
     
@@ -761,14 +748,38 @@ FuncPlotlyMatrixPlot <- function(dat) {
         showarrow = FALSE,
         font=list(size=16, family = "Arial")
         ) %>%
-      add_annotations( # these are the cell values
-        x = ~event_date_UTC,
-        y = ~as.integer(pin_position),
-        align = "center",
-        text = txt, # add the values in the cells
-        bordercolor = ~border_color,
-        borderwidth = 2,
-        showarrow = FALSE)
+      # Add regular read annotations
+add_annotations(
+  data = template %>% filter(is.na(SET_reader2)),
+  x = ~event_date_UTC,
+  y = ~as.integer(pin_position),
+  align = "center",
+  text = ~combined_change_height,
+  bordercolor = ~border_color,
+  borderwidth = 2,
+  showarrow = FALSE,
+  font = list(size = 12)  # regular size
+) %>%
+# Add double read annotations with bold/larger font--newer plotly no longer supports HTML in text boxes
+add_annotations(
+  data = template %>% filter(!is.na(SET_reader2)),
+  x = ~event_date_UTC,
+  y = ~as.integer(pin_position),
+  align = "center",
+  text = ~combined_change_height,
+  bordercolor = ~border_color,
+  borderwidth = 2,
+  showarrow = FALSE,
+  font = list(size = 14, family = "Arial Black")  # larger and bold
+)
+      # add_annotations( # these are the cell values
+      #   x = ~event_date_UTC,
+      #   y = ~as.integer(pin_position),
+      #   align = "center",
+      #   text = txt, # add the values in the cells
+      #   bordercolor = ~border_color,
+      #   borderwidth = 2,
+      #   showarrow = FALSE)
     })
     
     incProgress(1/2, detail = "...putting final plot together")
@@ -837,7 +848,7 @@ FuncPlotlyPieMatrix <- function(dat, plot_title) {
   height_px <- 200 + (150 * length(stations_vec)) # this is the plot height (paper)
   
   fig <- plot_ly(
-    textfont = list(size = 22, color = "white"),
+    textfont = list(size = 22, color = "black"),
     width = width_px,
     height = height_px,
   )
@@ -855,7 +866,6 @@ FuncPlotlyPieMatrix <- function(dat, plot_title) {
     for(d in 2:length(date_vec)) {  # the first survey event won't have any "change in pin height" estimates, so start with second survey event
       survey_date <- date_vec[d]
       fig <- fig %>% 
-        
         add_pie(data = dplyr::filter(dat, station_name == station & event_date_UTC == survey_date),
                 name = paste0(station, "_", survey_date),
                 labels = ~level_categ, 
@@ -864,7 +874,7 @@ FuncPlotlyPieMatrix <- function(dat, plot_title) {
                 textinfo = 'percent',
                 hoverinfo = 'text',
                 text = ~hover_label,
-                marker = list(colors = level_colors, line = list(color = '#FFFFFF', width = 1)),
+                marker = list(colors = level_colors, line = list(color = "gray", width = 1)),
                 domain = list(row = s-1, column = d-1))
       }
   }
@@ -2378,9 +2388,6 @@ renderPlotly({ # separate validation statements so they are checked in sequence
   shiny::req(!is.null(input$sel_Park))
 shiny::validate(need(unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park, message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
  shiny::req(!is.null(input$sel_MHStationCode))
- 
-  #      saveRDS(isolate(reactiveValuesToList(rv)), here::here("TEMP_rv.RDS"))
-  # saveRDS(isolate(reactiveValuesToList(input)), here::here("TEMP_input.RDS"))
 
     rv$RawMHHeatPlots <- FuncPlotlyMHHeatPlot(dat = subset(rv$MarkerHeatDataSET, station_code == input$sel_MHStationCode), heat_metric = "raw", discrete_cols = c("#F0E442", "EEE9E9"), discrete_levels = c("MH_alert", "no_alert")) # yellow for alert, gray for no alert
 
@@ -2406,39 +2413,86 @@ renderUI({
 
 renderPlotly({
   FuncOrderCheck(import = TRUE, examine = TRUE)
-
   shiny::validate(need(all(!is.null(rv$MarkerHeatDataSET), !is.null(rv$sel_MHSite), !is.null(input$sel_MHSite), !is.null(input$sel_Park)), message = "Please select a site and other filter criteria for the plots, then click the green 'Update Summaries' button"))
   
   shiny::validate(need(all(rv$sel_MHSite == input$sel_MHSite,  unique(rv$MarkerHeatDataSET$park_name)==input$sel_Park), message = "Input selection has changed. Please click the green 'Update Summaries' button to refresh plots."))
   
+  withProgress(message = "Just a moment", detail = "...generating plots", value = 0, {
   plot_dat <- rv$MarkerHeatDataSET %>% 
     dplyr::select(station_name, event_date_UTC, marker_horizon_name, core_measurement_number, core_measurement_depth_mm) %>%
+    dplyr::arrange(station_name, marker_horizon_name, event_date_UTC) %>%
     dplyr::group_by(station_name, event_date_UTC, marker_horizon_name) %>%
     dplyr::mutate(
       avg_reading = round(mean(core_measurement_depth_mm, na.rm = TRUE), 2),
       hover_text = paste0("<span style='font-size:16px; font-weight:bold;'>", station_name, "<br>Marker horizon: ", marker_horizon_name, "</span><br>Date: ", event_date_UTC, "<br>Average depth: ", avg_reading)
-      )
-
+    ) %>%
+    dplyr::ungroup() %>%
+    # Create column index for each marker horizon within each station
+    dplyr::group_by(station_name) %>%
+    dplyr::mutate(
+      col_index = as.integer(factor(marker_horizon_name, levels = unique(marker_horizon_name)))
+    ) %>%
+    dplyr::ungroup() 
+  
   p <- ggplot(plot_dat, aes(x = event_date_UTC, y = avg_reading, text = hover_text)) +
     geom_point(size = 1, alpha = 1, show.legend = FALSE) +
     geom_line(data = plot_dat, stat = "smooth", method = lm, aes(x = event_date_UTC, y = avg_reading, group = interaction(station_name, marker_horizon_name)), size = 0.3, alpha = 0.4) +
-    labs(title = NULL, x = NULL, y = "Marker Horizon Depth (mm)") +
+    labs(title = NULL, x = NULL, y = "Marker Horizon Depth (mm)\n") +
     theme_bw() +
-    facet_grid(rows = vars(station_name), cols = vars(marker_horizon_name), scales = "free_y") +
-    theme(strip.text = element_text(face = "bold", size = rel(1.5)))
+    facet_grid(rows = vars(station_name), cols = vars(col_index), scales = "free_y") +
+    theme(
+    strip.text.y = element_text(face = "bold", size = rel(1.2)))
+    
+    # Convert to plotly first
+fig <- ggplotly(p, height = length(unique(plot_dat$station_name)) * 300, width = max(plot_dat$col_index, na.rm = TRUE) * 200, tooltip = c("text"))
+
+# Get grid dimensions
+n_stations <- length(unique(plot_dat$station_name))
+n_cols <- max(plot_dat$col_index)
+
+# Get unique facet labels
+facet_labels <- plot_dat %>%
+  dplyr::select(station_name, col_index, marker_horizon_name) %>%
+  dplyr::distinct()
+
+# Add annotation for each facet
+for (i in 1:nrow(facet_labels)) {
+  station_idx <- which(sort(unique(plot_dat$station_name)) == facet_labels$station_name[i])
+  col_idx <- facet_labels$col_index[i]
   
-  ggplotly(p, height = length(unique(plot_dat$station_name)) * 350, tooltip = c("text")) %>%
-    add_annotations( # x-axis title
+  # Calculate paper coordinates
+  x_pos <- (col_idx - 0.5) / n_cols  # Center of column
+  y_pos <- 1 - ((station_idx - 1) / n_stations) - 0.005  # Top of row
+  
+  fig <- fig %>% add_annotations(
+    text = facet_labels$marker_horizon_name[i],
+    xref = "paper",
+    yref = "paper",
+    x = x_pos,
+    y = y_pos,
+    xanchor = "center",
+    yanchor = "top",
+    showarrow = FALSE,
+    font = list(size = 14, family = "Arial", color = "black")
+  )
+}
+
+fig <- fig %>%
+    add_annotations(
       x = 0.5,
-      y = -0.06,
+      y = -0.03,
       text = "Survey Year",
-          showarrow = F,
-          xref="paper",
-          yref="paper",
-          xanchor="center",
-          yanchor="top", # y anchor uses 'middle', x anchor uses 'center'
-          textangle=0,
-          font=list(size=18, family = "Arial"))
+      showarrow = F,
+      xref="paper",
+      yref="paper",
+      xanchor="center",
+      yanchor="top",
+      textangle=0,
+      font=list(size=18, family = "Arial"))
+      
+      
+      fig
+    })
 })
 ```
 
